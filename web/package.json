@@ -1,0 +1,17 @@
+{
+  "name": "gb-web",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build:wasm": "cd ../emu && wasm-pack build --target web --release",
+    "build:js": "node esbuild.config.js",
+    "build": "npm run build:wasm && npm run build:js",
+    "dev": "npm run build && npx serve dist",
+    "serve": "npx serve dist",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.2",
+    "serve": "^14.2.0"
+  }
+}

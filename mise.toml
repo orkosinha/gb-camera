@@ -1,3 +1,42 @@
 [tools]
 npm = "latest"
 rust = "latest"
+
+[tasks."build:wasm"]
+description = "Build Rust code to WebAssembly"
+dir = "emu"
+run = "wasm-pack build --target web --release"
+
+[tasks."build:js"]
+description = "Bundle JavaScript with esbuild"
+dir = "web"
+run = "node esbuild.config.js"
+depends = ["build:wasm"]
+
+[tasks.build]
+description = "Build the full project (WASM + JS)"
+depends = ["build:js"]
+
+[tasks.serve]
+description = "Serve the dist folder"
+dir = "web"
+run = "npx serve dist"
+
+[tasks.dev]
+description = "Build and serve the project"
+depends = ["build"]
+dir = "web"
+run = "npx serve dist"
+
+[tasks.open]
+description = "Build and open the project in the browser"
+depends = ["build"]
+dir = "web"
+run = "npx serve dist --open"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = """
+rm -rf web/dist
+rm -rf emu/pkg
+"""

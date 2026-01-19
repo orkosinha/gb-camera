@@ -1,1 +1,13 @@
+.DS_Store
 PRIVATE.md
+
+# Rust files
+*.rs.bk
+*.rs~
+*.rs.swp 
+target/
+Cargo.lock
+
+# Node.js/esbuild files
+node_modules/
+dist/
