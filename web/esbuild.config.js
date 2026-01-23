@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Directories
 const distDir = path.join(__dirname, 'dist');
 const distPkgDir = path.join(distDir, 'pkg');
-const wasmPkgDir = path.join(__dirname, '..', 'emu', 'pkg');
+const wasmPkgDir = path.join(__dirname, 'pkg');
 
 // Ensure output directories exist
 if (!fs.existsSync(distDir)) {

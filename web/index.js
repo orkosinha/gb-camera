@@ -18,6 +18,8 @@ let webcamCanvas = null;
 let webcamCtx = null;
 let webcamEnabled = false;
 let isGameBoyCamera = false;
+let previousGrayscale = null;  // Previous frame for smoothing
+const SMOOTHING_FACTOR = 0.7;  // Blend 70% new frame, 30% previous frame
 
 // Current ROM name for save file naming
 let currentRomName = 'game';
@@ -78,6 +80,7 @@ async function initWebcam() {
         await webcamVideo.play();
 
         webcamEnabled = true;
+        previousGrayscale = null;  // Reset frame smoothing
         debugLog(`Webcam initialized: ${webcamVideo.videoWidth}x${webcamVideo.videoHeight}`);
         return true;
     } catch (err) {

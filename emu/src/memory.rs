@@ -256,23 +256,11 @@ impl Memory {
                 }
 
                 if !self.ram_enabled {
-                    // For Pocket Camera: allow reading captured image data even with RAM disabled
-                    // The real hardware seems to make the captured image accessible this way
-                    if self.mbc_type == MbcType::PocketCamera && self.ram_bank == 0 {
-                        let local_addr = (addr - 0xA000) as usize;
-                        // Captured image is at SRAM 0x0100-0x0EFF (addresses A100-AEFF)
-                        if local_addr >= 0x0100 && local_addr < 0x0F00 {
-                            let value = self.cartridge_ram.get(local_addr).copied().unwrap_or(0x00);
-                            static CAM_SRAM_LIMITER: RateLimiter = RateLimiter::new(50);
-                            log_info_limited!(
-                                LogCategory::Camera,
-                                &CAM_SRAM_LIMITER,
-                                "Camera SRAM read (RAM disabled): {:04X} -> {:02X}",
-                                addr,
-                                value
-                            );
-                            return value;
-                        }
+                    // For Pocket Camera: allow full SRAM access even with RAM disabled
+                    // The Game Boy Camera doesn't require RAM enable for SRAM operations
+                    if self.mbc_type == MbcType::PocketCamera {
+                        let offset = (self.ram_bank as usize) * RAM_BANK_SIZE + (addr - 0xA000) as usize;
+                        return self.cartridge_ram.get(offset).copied().unwrap_or(0x00);
                     }
                     return 0xFF;
                 }
@@ -453,7 +441,8 @@ impl Memory {
                     return;
                 }
 
-                if !self.ram_enabled {
+                // For Pocket Camera: allow SRAM access even with RAM disabled
+                if !self.ram_enabled && self.mbc_type != MbcType::PocketCamera {
                     return;
                 }
 
@@ -665,11 +654,24 @@ impl Memory {
             .any(|t| t[0] != 0 || t[1] != 0 || t[2] != 0);
 
         // Log first few dither values for debugging
+        // Log more dither threshold info for debugging
         log_info!(
             LogCategory::Camera,
-            "Dither active={}, [0]: [{:02X},{:02X},{:02X}]",
+            "Dither active={}, thresholds[0]=[{:02X},{:02X},{:02X}], [8]=[{:02X},{:02X},{:02X}]",
             dither_active,
-            dither_thresholds[0][0], dither_thresholds[0][1], dither_thresholds[0][2]
+            dither_thresholds[0][0], dither_thresholds[0][1], dither_thresholds[0][2],
+            dither_thresholds[8][0], dither_thresholds[8][1], dither_thresholds[8][2]
+        );
+
+        // Log input image stats
+        let img_sum: u32 = self.camera_image.iter().map(|&x| x as u32).sum();
+        let img_avg = img_sum / (WIDTH * HEIGHT) as u32;
+        let img_min = self.camera_image.iter().copied().min().unwrap_or(0);
+        let img_max = self.camera_image.iter().copied().max().unwrap_or(0);
+        log_info!(
+            LogCategory::Camera,
+            "Input image: avg={}, min={}, max={}, ready={}",
+            img_avg, img_min, img_max, self.camera_image_ready
         );
 
         // Calculate brightness multiplier from exposure (default ~0x1000 is "normal")
@@ -794,6 +796,17 @@ impl Memory {
                 color_counts[final_color as usize] += 1;
             }
         }
+
+        // Log processed pixel stats
+        let proc_sum: u32 = processed.iter().map(|&x| x as u32).sum();
+        let proc_avg = proc_sum / (WIDTH * HEIGHT) as u32;
+        let proc_min = processed.iter().copied().min().unwrap_or(0);
+        let proc_max = processed.iter().copied().max().unwrap_or(0);
+        log_info!(
+            LogCategory::Camera,
+            "Processed: avg={}, min={}, max={}",
+            proc_avg, proc_min, proc_max
+        );
 
         log_info!(
             LogCategory::Camera,

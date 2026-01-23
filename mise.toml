@@ -14,7 +14,7 @@ run = "wasm-pack build --target web --out-dir ../web/pkg --features wasm --no-de
 [tasks."build:js"]
 description = "Bundle JavaScript with esbuild"
 dir = "web"
-run = "npx esbuild index.js --bundle --format=esm --outfile=bundle.js"
+run = "node esbuild.config.js"
 depends = ["build:wasm"]
 
 [tasks."build:web"]
@@ -24,13 +24,13 @@ depends = ["build:js"]
 [tasks.dev]
 description = "Build and serve the web project"
 depends = ["build:web"]
-dir = "web"
+dir = "web/dist"
 run = "npx serve ."
 
 [tasks.open]
 description = "Build and open the web project in the browser"
 depends = ["build:web"]
-dir = "web"
+dir = "web/dist"
 run = "npx serve . --open"
 
 # =============================================================================
@@ -103,6 +103,7 @@ run = "cargo fmt"
 description = "Remove build artifacts"
 run = """
 rm -rf web/pkg
+rm -rf web/dist
 rm -rf web/bundle.js
 rm -rf emu/target
 rm -rf ios/gb-ios/RustLib/*.a
@@ -112,6 +113,7 @@ rm -rf ios/gb-ios/RustLib/*.a
 description = "Remove all build artifacts including iOS libs"
 run = """
 rm -rf web/pkg
+rm -rf web/dist
 rm -rf web/bundle.js
 rm -rf emu/target
 rm -rf ios/gb-ios/RustLib/*.a
