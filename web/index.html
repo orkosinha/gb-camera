@@ -1,10 +1,48 @@
-<!doctype html>
-<html lang="en-US">
-  <head>
-    <meta charset="utf-8" />
-    <title>gb-emu test</title>
-  </head>
-  <body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>gb-photo</title>
+
+    <style>
+        /* Hide native file input */
+        input[type="file"] {
+            display: none;
+        }
+
+        /* Button-style label */
+        .button {
+            display: inline-block;
+            padding: 8px 14px;
+            border: 1px solid #000;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 14px;
+        }
+
+        .button:hover {
+            background: #eee;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Emulator</h1>
+
+    <canvas id="screen" width="160" height="144"></canvas>
+
+    <p>
+        <label for="rom-input" class="button">Load ROM</label>
+        <input type="file" id="rom-input" accept=".gb,.gbc,.bin">
+    </p>
+
+    <p id="save-controls" style="display: none;">
+        <button id="download-save" class="button">Download Save</button>
+        <label for="load-save" class="button">Load Save</label>
+        <input type="file" id="load-save" accept=".sav">
+    </p>
+
     <script type="module" src="bundle.js"></script>
-  </body>
+
+</body>
 </html>

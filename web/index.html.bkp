@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GB (Web)Camera</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 0 0 20px 0;
+            font-size: 1.5rem;
+            color: #9d4edd;
+        }
+
+        .emulator-container {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        #screen {
+            display: block;
+            background: #9bbc0f;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            border: 4px solid #0f3460;
+            border-radius: 4px;
+        }
+
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .rom-loader {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #9d4edd;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .rom-loader:hover {
+            background: #7b2cbf;
+        }
+
+        .rom-loader input {
+            display: none;
+        }
+
+        .info {
+            margin-top: 20px;
+            font-size: 0.875rem;
+            color: #888;
+            text-align: center;
+        }
+
+        .keyboard-hint {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            font-size: 0.8rem;
+        }
+
+        .keyboard-hint kbd {
+            display: inline-block;
+            padding: 2px 6px;
+            background: #333;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Game Boy Emulator</h1>
+
+    <div class="emulator-container">
+        <canvas id="screen" width="160" height="144"></canvas>
+    </div>
+
+    <div class="controls">
+        <label class="rom-loader">
+            Load ROM
+            <input type="file" id="rom-input" accept=".gb,.gbc,.bin">
+        </label>
+    </div>
+
+    <div class="info">
+        <p>Load a Game Boy ROM file (.gb) to start</p>
+        <div class="keyboard-hint">
+            <strong>Controls:</strong>
+            <kbd>Arrow Keys</kbd> D-Pad |
+            <kbd>Z</kbd> A |
+            <kbd>X</kbd> B |
+            <kbd>Enter</kbd> Start |
+            <kbd>Shift</kbd> Select
+        </div>
+    </div>
+
+    <script type="module" src="bundle.js"></script>
+</body>
+</html>

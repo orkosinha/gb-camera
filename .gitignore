@@ -4,10 +4,32 @@ PRIVATE.md
 # Rust files
 *.rs.bk
 *.rs~
-*.rs.swp 
+*.rs.swp
 target/
 Cargo.lock
 
 # Node.js/esbuild files
 node_modules/
 dist/
+
+# WASM build artifacts
+web/pkg/
+emu/pkg/
+web/bundle.js
+
+# iOS build artifacts
+ios/gb-ios/RustLib/*.a
+
+# Xcode
+*.xcuserstate
+*.xcworkspacedata
+xcuserdata/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Backup files
+*.bkp
+*.backup
+*~

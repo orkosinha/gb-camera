@@ -1,11 +1,20 @@
-use wasm_bindgen::prelude::*;
+// Core emulator modules (always compiled)
+mod bus;
+mod cpu;
+mod interrupts;
+mod joypad;
+mod log;
+pub mod memory;
+mod ppu;
+mod timer;
 
-#[wasm_bindgen]
-extern "C" {
-    pub fn alert(s: &str);
-}
+// FFI module for iOS/native builds
+#[cfg(feature = "ios")]
+pub mod ffi;
 
-#[wasm_bindgen]
-pub fn greet(name: &str) {
-    alert(&format!("Hello, {}!", name));
-}
+// WASM module for web builds
+#[cfg(feature = "wasm")]
+mod wasm;
+
+#[cfg(feature = "wasm")]
+pub use wasm::*;
