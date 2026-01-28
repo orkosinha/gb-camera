@@ -130,8 +130,17 @@ function captureWebcamFrame() {
         const g = imageData.data[i * 4 + 1];
         const b = imageData.data[i * 4 + 2];
         // Convert to grayscale using luminance formula
-        grayscale[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        let value = 0.299 * r + 0.587 * g + 0.114 * b;
+
+        // Blend with previous frame to smooth out auto-exposure changes
+        if (previousGrayscale) {
+            value = SMOOTHING_FACTOR * value + (1 - SMOOTHING_FACTOR) * previousGrayscale[i];
+        }
+        grayscale[i] = Math.round(value);
     }
+
+    // Store for next frame's smoothing
+    previousGrayscale = grayscale;
 
     // Send to emulator
     emulator.set_camera_image(grayscale);
