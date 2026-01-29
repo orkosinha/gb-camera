@@ -199,6 +199,7 @@ impl Memory {
         Ok(())
     }
 
+    #[inline]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             // ROM Bank 0 (fixed)
@@ -311,6 +312,7 @@ impl Memory {
         }
     }
 
+    #[inline]
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             // RAM Enable (0x0000-0x1FFF)
@@ -478,6 +480,7 @@ impl Memory {
         }
     }
 
+    #[inline]
     fn read_io(&self, addr: u16) -> u8 {
         let offset = (addr - 0xFF00) as usize;
         match offset {
@@ -486,6 +489,7 @@ impl Memory {
         }
     }
 
+    #[inline]
     fn write_io(&mut self, addr: u16, value: u8) {
         let offset = (addr - 0xFF00) as usize;
         match offset {
@@ -515,14 +519,17 @@ impl Memory {
     }
 
     // I/O register accessors for other components
+    #[inline]
     pub fn read_io_direct(&self, offset: u8) -> u8 {
         self.io[offset as usize]
     }
 
+    #[inline]
     pub fn write_io_direct(&mut self, offset: u8, value: u8) {
         self.io[offset as usize] = value;
     }
 
+    #[inline]
     pub fn get_ie(&self) -> u8 {
         self.ie
     }
@@ -533,6 +540,7 @@ impl Memory {
         &self.vram
     }
 
+    #[inline]
     pub fn get_oam(&self) -> &[u8] {
         &self.oam
     }

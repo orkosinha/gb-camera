@@ -127,12 +127,14 @@ impl Cpu {
         self.execute(opcode, bus)
     }
 
+    #[inline]
     fn fetch(&mut self, bus: &MemoryBus) -> u8 {
         let opcode = bus.read(self.pc);
         self.pc = self.pc.wrapping_add(1);
         opcode
     }
 
+    #[inline]
     fn fetch_word(&mut self, bus: &MemoryBus) -> u16 {
         let low = self.fetch(bus) as u16;
         let high = self.fetch(bus) as u16;
@@ -1403,6 +1405,7 @@ impl Cpu {
         base_cycles
     }
 
+    #[inline]
     fn get_reg(&self, idx: u8, bus: &MemoryBus) -> u8 {
         match idx {
             0 => self.b,
@@ -1417,6 +1420,7 @@ impl Cpu {
         }
     }
 
+    #[inline]
     fn set_reg(&mut self, idx: u8, value: u8, bus: &mut MemoryBus) {
         match idx {
             0 => self.b = value,
@@ -1432,40 +1436,50 @@ impl Cpu {
     }
 
     // Register pair accessors
+    #[inline]
     fn af(&self) -> u16 {
         ((self.a as u16) << 8) | (self.f as u16)
     }
+    #[inline]
     fn bc(&self) -> u16 {
         ((self.b as u16) << 8) | (self.c as u16)
     }
+    #[inline]
     fn de(&self) -> u16 {
         ((self.d as u16) << 8) | (self.e as u16)
     }
+    #[inline]
     fn hl(&self) -> u16 {
         ((self.h as u16) << 8) | (self.l as u16)
     }
 
+    #[inline]
     fn set_af(&mut self, v: u16) {
         self.a = (v >> 8) as u8;
         self.f = (v & 0xF0) as u8;
     }
+    #[inline]
     fn set_bc(&mut self, v: u16) {
         self.b = (v >> 8) as u8;
         self.c = v as u8;
     }
+    #[inline]
     fn set_de(&mut self, v: u16) {
         self.d = (v >> 8) as u8;
         self.e = v as u8;
     }
+    #[inline]
     fn set_hl(&mut self, v: u16) {
         self.h = (v >> 8) as u8;
         self.l = v as u8;
     }
 
     // Flag accessors
+    #[inline]
     fn flag(&self, bit: u8) -> bool {
         (self.f >> bit) & 1 == 1
     }
+    #[inline]
     fn set_flag(&mut self, bit: u8, value: bool) {
         if value {
             self.f |= 1 << bit;
@@ -1475,6 +1489,7 @@ impl Cpu {
     }
 
     // Stack operations
+    #[inline]
     fn push_word(&mut self, bus: &mut MemoryBus, value: u16) {
         self.sp = self.sp.wrapping_sub(1);
         bus.write(self.sp, (value >> 8) as u8);
@@ -1482,6 +1497,7 @@ impl Cpu {
         bus.write(self.sp, value as u8);
     }
 
+    #[inline]
     fn pop_word(&mut self, bus: &MemoryBus) -> u16 {
         let low = bus.read(self.sp) as u16;
         self.sp = self.sp.wrapping_add(1);
@@ -1491,6 +1507,7 @@ impl Cpu {
     }
 
     // ALU operations
+    #[inline]
     fn inc(&mut self, value: u8) -> u8 {
         let result = value.wrapping_add(1);
         self.set_flag(FLAG_Z, result == 0);
@@ -1499,6 +1516,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn dec(&mut self, value: u8) -> u8 {
         let result = value.wrapping_sub(1);
         self.set_flag(FLAG_Z, result == 0);
@@ -1507,6 +1525,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn add(&mut self, value: u8) {
         let result = self.a as u16 + value as u16;
         self.set_flag(FLAG_Z, (result & 0xFF) == 0);
@@ -1516,6 +1535,7 @@ impl Cpu {
         self.a = result as u8;
     }
 
+    #[inline]
     fn adc(&mut self, value: u8) {
         let carry = if self.flag(FLAG_C) { 1 } else { 0 };
         let result = self.a as u16 + value as u16 + carry as u16;
@@ -1526,6 +1546,7 @@ impl Cpu {
         self.a = result as u8;
     }
 
+    #[inline]
     fn sub(&mut self, value: u8) {
         let result = self.a.wrapping_sub(value);
         self.set_flag(FLAG_Z, result == 0);
@@ -1535,6 +1556,7 @@ impl Cpu {
         self.a = result;
     }
 
+    #[inline]
     fn sbc(&mut self, value: u8) {
         let carry = if self.flag(FLAG_C) { 1u8 } else { 0 };
         let result = self.a.wrapping_sub(value).wrapping_sub(carry);
@@ -1545,6 +1567,7 @@ impl Cpu {
         self.a = result;
     }
 
+    #[inline]
     fn and(&mut self, value: u8) {
         self.a &= value;
         self.set_flag(FLAG_Z, self.a == 0);
@@ -1553,6 +1576,7 @@ impl Cpu {
         self.set_flag(FLAG_C, false);
     }
 
+    #[inline]
     fn xor(&mut self, value: u8) {
         self.a ^= value;
         self.set_flag(FLAG_Z, self.a == 0);
@@ -1561,6 +1585,7 @@ impl Cpu {
         self.set_flag(FLAG_C, false);
     }
 
+    #[inline]
     fn or(&mut self, value: u8) {
         self.a |= value;
         self.set_flag(FLAG_Z, self.a == 0);
@@ -1569,6 +1594,7 @@ impl Cpu {
         self.set_flag(FLAG_C, false);
     }
 
+    #[inline]
     fn cp(&mut self, value: u8) {
         self.set_flag(FLAG_Z, self.a == value);
         self.set_flag(FLAG_N, true);
@@ -1576,6 +1602,7 @@ impl Cpu {
         self.set_flag(FLAG_C, self.a < value);
     }
 
+    #[inline]
     fn add_hl(&mut self, value: u16) {
         let hl = self.hl();
         let result = hl.wrapping_add(value);
@@ -1585,6 +1612,7 @@ impl Cpu {
         self.set_hl(result);
     }
 
+    #[inline]
     fn daa(&mut self) {
         let mut adjust = 0u8;
         let mut carry = false;
@@ -1615,6 +1643,7 @@ impl Cpu {
     }
 
     // Rotate/Shift operations
+    #[inline]
     fn rlc(&mut self, value: u8) -> u8 {
         let carry = value >> 7;
         let result = (value << 1) | carry;
@@ -1625,6 +1654,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn rrc(&mut self, value: u8) -> u8 {
         let carry = value & 1;
         let result = (value >> 1) | (carry << 7);
@@ -1635,6 +1665,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn rl(&mut self, value: u8) -> u8 {
         let old_carry = if self.flag(FLAG_C) { 1 } else { 0 };
         let new_carry = value >> 7;
@@ -1646,6 +1677,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn rr(&mut self, value: u8) -> u8 {
         let old_carry = if self.flag(FLAG_C) { 1 } else { 0 };
         let new_carry = value & 1;
@@ -1657,6 +1689,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn sla(&mut self, value: u8) -> u8 {
         let carry = value >> 7;
         let result = value << 1;
@@ -1667,6 +1700,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn sra(&mut self, value: u8) -> u8 {
         let carry = value & 1;
         let result = (value >> 1) | (value & 0x80);
@@ -1677,6 +1711,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn srl(&mut self, value: u8) -> u8 {
         let carry = value & 1;
         let result = value >> 1;
@@ -1687,6 +1722,7 @@ impl Cpu {
         result
     }
 
+    #[inline]
     fn swap(&mut self, value: u8) -> u8 {
         let result = value.rotate_left(4);
         self.set_flag(FLAG_Z, result == 0);

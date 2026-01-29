@@ -9,16 +9,19 @@ impl InterruptController {
         InterruptController
     }
 
+    #[inline]
     pub fn request_vblank(&self, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
         memory.write_io_direct(0x0F, if_reg | 0x01);
     }
 
+    #[inline]
     pub fn request_lcd_stat(&self, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
         memory.write_io_direct(0x0F, if_reg | 0x02);
     }
 
+    #[inline]
     pub fn request_timer(&self, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
         memory.write_io_direct(0x0F, if_reg | 0x04);
@@ -26,16 +29,19 @@ impl InterruptController {
 
     /// Request serial interrupt. Currently unused as serial is not implemented.
     #[allow(dead_code)]
+    #[inline]
     pub fn request_serial(&self, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
         memory.write_io_direct(0x0F, if_reg | 0x08);
     }
 
+    #[inline]
     pub fn request_joypad(&self, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
         memory.write_io_direct(0x0F, if_reg | 0x10);
     }
 
+    #[inline]
     pub fn clear(&self, memory: &mut Memory, bit: u8) {
         let if_reg = memory.read_io_direct(0x0F);
         memory.write_io_direct(0x0F, if_reg & !(1 << bit));

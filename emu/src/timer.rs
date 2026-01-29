@@ -26,6 +26,7 @@ impl Timer {
         }
     }
 
+    #[inline]
     fn tick_once(&mut self, memory: &mut Memory, interrupts: &InterruptController) {
         // Handle delayed TIMA reload
         if self.overflow_cycles > 0 {

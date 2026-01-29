@@ -19,6 +19,7 @@ impl<'a> MemoryBus<'a> {
         }
     }
 
+    #[inline]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             // Joypad register
@@ -30,6 +31,7 @@ impl<'a> MemoryBus<'a> {
         }
     }
 
+    #[inline]
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
             // Joypad register
@@ -42,10 +44,12 @@ impl<'a> MemoryBus<'a> {
     }
 
     // Delegate methods needed by other components
+    #[inline]
     pub fn get_ie(&self) -> u8 {
         self.memory.get_ie()
     }
 
+    #[inline]
     pub fn read_io_direct(&self, offset: u8) -> u8 {
         self.memory.read_io_direct(offset)
     }
