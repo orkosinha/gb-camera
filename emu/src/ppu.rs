@@ -7,8 +7,8 @@
 use std::fmt;
 
 use crate::interrupts::{Interrupt, InterruptController};
-use crate::memory::io;
 use crate::memory::Memory;
+use crate::memory::io;
 
 /// Debug state for PPU inspection.
 #[allow(dead_code)]
@@ -238,13 +238,12 @@ impl Ppu {
 
         let buf = &mut self.buffer[line * SCREEN_WIDTH..][..SCREEN_WIDTH];
 
-        for screen_x in 0..SCREEN_WIDTH {
+        for (screen_x, buf_elem) in buf.iter_mut().enumerate() {
             let x = (screen_x + scx) & 0xFF;
             let tile_col = x >> 3;
             let pixel_col = 7 - (x & 7);
 
             let tile_idx = memory.read(tile_map_base + (tile_row * 32 + tile_col) as u16);
-
             let tile_data_addr = if signed_addressing {
                 let signed_idx = tile_idx as i8 as i16;
                 (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row_offset as i16) as u16
@@ -256,7 +255,7 @@ impl Ppu {
             let high = memory.read(tile_data_addr + 1);
 
             let color_idx = ((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1);
-            buf[screen_x] = (bgp >> (color_idx * 2)) & 0x03;
+            *buf_elem = (bgp >> (color_idx * 2)) & 0x03;
         }
     }
 
@@ -282,7 +281,7 @@ impl Ppu {
         let start_x = wx.max(0) as usize;
         let buf = &mut self.buffer[line * SCREEN_WIDTH..][..SCREEN_WIDTH];
 
-        for screen_x in start_x..SCREEN_WIDTH {
+        for (screen_x, buf_elem) in buf.iter_mut().enumerate().skip(start_x) {
             let window_x = (screen_x as i16 - wx) as usize;
             let tile_col = window_x >> 3;
             let pixel_col = 7 - (window_x & 7);
@@ -300,7 +299,7 @@ impl Ppu {
             let high = memory.read(tile_data_addr + 1);
 
             let color_idx = ((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1);
-            buf[screen_x] = (bgp >> (color_idx * 2)) & 0x03;
+            *buf_elem = (bgp >> (color_idx * 2)) & 0x03;
         }
 
         self.window_line_counter += 1;

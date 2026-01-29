@@ -11,9 +11,9 @@ use std::fmt;
 
 use crate::bus::MemoryBus;
 use crate::interrupts::{Interrupt, InterruptController};
-use crate::memory::io;
 use crate::log::LogCategory;
 use crate::log_info;
+use crate::memory::io;
 
 /// Debug state for CPU inspection.
 #[allow(dead_code)]

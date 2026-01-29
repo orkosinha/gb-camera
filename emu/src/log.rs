@@ -54,7 +54,7 @@ impl RateLimiter {
     /// Check if we should log at this interval (e.g., every N calls).
     pub fn should_log_interval(&self, interval: u32) -> bool {
         let count = self.counter.fetch_add(1, Ordering::Relaxed);
-        count < self.limit || count % interval == 0
+        count < self.limit || count.is_multiple_of(interval)
     }
 
     /// Get current count without incrementing.

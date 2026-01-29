@@ -87,15 +87,12 @@ impl GameBoyCore {
 
         while cycles_elapsed < CYCLES_PER_FRAME {
             let cycles = {
-                let mut bus =
-                    MemoryBus::new(&mut self.memory, &mut self.timer, &mut self.joypad);
+                let mut bus = MemoryBus::new(&mut self.memory, &mut self.timer, &mut self.joypad);
                 self.cpu.step(&mut bus, &mut self.interrupts)
             };
 
-            self.timer
-                .tick(cycles, &mut self.memory, &self.interrupts);
-            self.ppu
-                .tick(cycles, &mut self.memory, &self.interrupts);
+            self.timer.tick(cycles, &mut self.memory, &self.interrupts);
+            self.ppu.tick(cycles, &mut self.memory, &self.interrupts);
 
             cycles_elapsed += cycles;
             instructions_this_frame += 1;
@@ -129,8 +126,7 @@ impl GameBoyCore {
         if let Some(btn) = crate::joypad::Button::from_u8(button) {
             self.joypad.set_button(btn, pressed);
             if pressed {
-                self.interrupts
-                    .request(Interrupt::Joypad, &mut self.memory);
+                self.interrupts.request(Interrupt::Joypad, &mut self.memory);
             }
         }
     }

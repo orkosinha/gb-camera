@@ -64,5 +64,4 @@ impl<'a> MemoryBus<'a> {
     pub fn read_io_direct(&self, offset: u8) -> u8 {
         self.memory.read_io_direct(offset)
     }
-
 }

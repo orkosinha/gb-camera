@@ -26,14 +26,21 @@ pub struct GameBoy {
 impl GameBoy {
     #[wasm_bindgen(constructor)]
     pub fn new() -> GameBoy {
-        log_info!(LogCategory::General, "GameBoy::new() - Creating emulator instance");
+        log_info!(
+            LogCategory::General,
+            "GameBoy::new() - Creating emulator instance"
+        );
         GameBoy {
             core: GameBoyCore::new(),
         }
     }
 
     pub fn load_rom(&mut self, rom_data: &[u8]) -> Result<(), JsValue> {
-        log_info!(LogCategory::General, "load_rom() - Loading ROM of {} bytes", rom_data.len());
+        log_info!(
+            LogCategory::General,
+            "load_rom() - Loading ROM of {} bytes",
+            rom_data.len()
+        );
 
         // Log ROM header information before loading
         if rom_data.len() >= 0x150 {
@@ -49,13 +56,19 @@ impl GameBoy {
             log_info!(
                 LogCategory::General,
                 "ROM Header: title='{}', cart_type=0x{:02X}, rom_size=0x{:02X}, ram_size=0x{:02X}",
-                title, cart_type, rom_size, ram_size
+                title,
+                cart_type,
+                rom_size,
+                ram_size
             );
 
             log_info!(
                 LogCategory::General,
                 "Entry point (0x100-0x103): {:02X} {:02X} {:02X} {:02X}",
-                rom_data[0x100], rom_data[0x101], rom_data[0x102], rom_data[0x103]
+                rom_data[0x100],
+                rom_data[0x101],
+                rom_data[0x102],
+                rom_data[0x103]
             );
         }
 
@@ -184,7 +197,11 @@ impl GameBoy {
         log_info!(LogCategory::Cpu, "{}", self.core.cpu.get_debug_state());
         log_info!(LogCategory::Ppu, "{}", self.core.ppu.get_debug_state());
         log_info!(LogCategory::Memory, "{}", self.core.memory.get_io_state());
-        log_info!(LogCategory::Memory, "{}", self.core.memory.get_debug_state());
+        log_info!(
+            LogCategory::Memory,
+            "{}",
+            self.core.memory.get_debug_state()
+        );
 
         if !self.core.memory.is_lcd_enabled() {
             log_warn!(LogCategory::General, "LCD is disabled (LCDC bit 7 = 0)");

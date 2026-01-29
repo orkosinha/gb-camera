@@ -4,7 +4,7 @@
 //! enabled via the IE register (0xFFFF). Priority order (highest first):
 //! VBlank, LCD STAT, Timer, Serial, Joypad.
 
-use crate::memory::{io, Memory};
+use crate::memory::{Memory, io};
 
 /// Game Boy interrupt types, ordered by hardware priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

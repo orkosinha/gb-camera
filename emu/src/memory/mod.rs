@@ -289,7 +289,8 @@ impl Memory {
                     // For Pocket Camera: allow full SRAM access even with RAM disabled
                     // The Game Boy Camera doesn't require RAM enable for SRAM operations
                     if self.mbc_type == MbcType::PocketCamera {
-                        let offset = (self.ram_bank as usize) * RAM_BANK_SIZE + (addr - 0xA000) as usize;
+                        let offset =
+                            (self.ram_bank as usize) * RAM_BANK_SIZE + (addr - 0xA000) as usize;
                         return self.cartridge_ram.get(offset).copied().unwrap_or(0x00);
                     }
                     return 0xFF;
@@ -300,7 +301,7 @@ impl Memory {
 
                 // Log reads from camera image area for debugging
                 // Expanded range to catch all captured tile data reads (A100-AEFF = 0x0E00 bytes)
-                if self.mbc_type == MbcType::PocketCamera && addr >= 0xA100 && addr < 0xAF00 {
+                if self.mbc_type == MbcType::PocketCamera && (0xA100..0xAF00).contains(&addr) {
                     static SRAM_READ_LIMITER: RateLimiter = RateLimiter::new(50);
                     log_info_limited!(
                         LogCategory::Camera,
@@ -399,7 +400,11 @@ impl Memory {
                             "RAM bank: {} -> {} (mode={})",
                             self.ram_bank,
                             new_bank,
-                            if new_bank >= 0x10 { "CAMERA_REGS" } else { "SRAM" }
+                            if new_bank >= 0x10 {
+                                "CAMERA_REGS"
+                            } else {
+                                "SRAM"
+                            }
                         );
                         self.ram_bank = new_bank;
                     }

@@ -1,7 +1,7 @@
 //! Opcode decode tables.
 
-use crate::bus::MemoryBus;
 use super::{Cpu, FLAG_C, FLAG_H, FLAG_N, FLAG_Z};
+use crate::bus::MemoryBus;
 
 impl Cpu {
     pub(super) fn execute(&mut self, opcode: u8, bus: &mut MemoryBus) -> u32 {

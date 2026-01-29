@@ -12,9 +12,7 @@ impl Memory {
         let len = data.len().min(128 * 112);
 
         // Store raw 8-bit grayscale values
-        for i in 0..len {
-            self.camera_image[i] = data[i];
-        }
+        self.camera_image.copy_from_slice(&data[..len]);
         self.camera_image_ready = true;
 
         // Log occasionally to verify data is being received
@@ -81,11 +79,11 @@ impl Memory {
         // Read dithering matrix from A006-A035 (48 bytes)
         // This encodes 3 threshold levels for a 4x4 pattern
         let mut dither_thresholds: [[u8; 3]; 16] = [[0; 3]; 16];
-        for i in 0..16 {
-            for t in 0..3 {
+        for (i, row) in dither_thresholds.iter_mut().enumerate() {
+            for (t, cell) in row.iter_mut().enumerate() {
                 let reg_idx = 0x06 + i * 3 + t;
                 if reg_idx < 0x36 {
-                    dither_thresholds[i][t] = self.camera_regs[reg_idx];
+                    *cell = self.camera_regs[reg_idx];
                 }
             }
         }
@@ -287,8 +285,8 @@ impl Memory {
                         let color = quantized[pixel_index];
 
                         let bit_pos = 7 - col;
-                        low_byte |= ((color & 0x01) as u8) << bit_pos;
-                        high_byte |= (((color >> 1) & 0x01) as u8) << bit_pos;
+                        low_byte |= (color & 0x01) << bit_pos;
+                        high_byte |= ((color >> 1) & 0x01) << bit_pos;
                     }
 
                     if sram_addr + row * 2 + 1 < self.cartridge_ram.len() {
@@ -317,7 +315,7 @@ impl Memory {
         const STATE_VECTOR_OFFSET: usize = 0x11B2;
 
         // For saved slots (1-30), check the ROM's state vector
-        if slot >= 1 && slot <= 30 {
+        if (1..=30).contains(&slot) {
             let state_idx = STATE_VECTOR_OFFSET + (slot - 1) as usize;
             if state_idx < self.cartridge_ram.len() && self.cartridge_ram[state_idx] == 0xFF {
                 return Vec::new();
