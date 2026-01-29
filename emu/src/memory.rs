@@ -97,6 +97,7 @@ pub struct Memory {
     // This is set from JavaScript webcam and processed by sensor emulation on capture
     camera_image: Box<[u8; 128 * 112]>,
     camera_image_ready: bool,
+    camera_capture_dirty: bool,
 }
 
 impl Memory {
@@ -119,6 +120,7 @@ impl Memory {
             camera_regs: [0; 0x80],
             camera_image: Box::new([0; 128 * 112]),
             camera_image_ready: false,
+            camera_capture_dirty: false,
         };
         mem.init_io_defaults();
         mem
@@ -428,6 +430,7 @@ impl Memory {
 
                             // Capture triggered - convert camera_image to tiles in SRAM
                             self.process_camera_capture(invert);
+                            self.camera_capture_dirty = true;
                             // Clear capture bit to indicate completion
                             self.camera_regs[0] &= !0x01;
 
@@ -844,9 +847,98 @@ impl Memory {
         }
     }
 
+    /// Decode a GB Camera photo slot from SRAM into RGBA pixel data.
+    /// Slot 0 = active capture buffer (bank 0, offset 0x0100).
+    /// Slots 1-30 = saved photos in banks 1-15 (2 per bank).
+    /// Returns 128×112×4 bytes of RGBA, or empty vec if slot is unoccupied.
+    pub fn decode_camera_photo(&self, slot: u8) -> Vec<u8> {
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 112;
+        const TILE_SIZE: usize = 8;
+        const TILES_X: usize = WIDTH / TILE_SIZE;
+        const TILES_Y: usize = HEIGHT / TILE_SIZE;
+        const TILE_BYTES: usize = 16;
+        const PHOTO_BYTES: usize = TILES_X * TILES_Y * TILE_BYTES; // 3584
+        // GB Camera state vector: 30 bytes at SRAM 0x11B2, one per slot.
+        // 0xFF = empty/erased, anything else = occupied.
+        const STATE_VECTOR_OFFSET: usize = 0x11B2;
+
+        // For saved slots (1-30), check the ROM's state vector
+        if slot >= 1 && slot <= 30 {
+            let state_idx = STATE_VECTOR_OFFSET + (slot - 1) as usize;
+            if state_idx < self.cartridge_ram.len()
+                && self.cartridge_ram[state_idx] == 0xFF
+            {
+                return Vec::new();
+            }
+        }
+
+        let sram_offset = if slot == 0 {
+            0x0100
+        } else {
+            let adjusted = (slot - 1) as usize;
+            let bank = adjusted / 2 + 1;
+            let offset_in_bank = (adjusted % 2) * 0x0E00;
+            bank * RAM_BANK_SIZE + offset_in_bank
+        };
+
+        if sram_offset + PHOTO_BYTES > self.cartridge_ram.len() {
+            return Vec::new();
+        }
+
+        let palette: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
+        let mut rgba = vec![0u8; WIDTH * HEIGHT * 4];
+
+        for tile_y in 0..TILES_Y {
+            for tile_x in 0..TILES_X {
+                let tile_index = tile_y * TILES_X + tile_x;
+                let tile_offset = sram_offset + tile_index * TILE_BYTES;
+
+                for row in 0..TILE_SIZE {
+                    let low = self.cartridge_ram[tile_offset + row * 2];
+                    let high = self.cartridge_ram[tile_offset + row * 2 + 1];
+
+                    for col in 0..TILE_SIZE {
+                        let bit = 7 - col;
+                        let color_idx = ((high >> bit) & 1) << 1 | ((low >> bit) & 1);
+                        let gray = palette[color_idx as usize];
+
+                        let px = tile_x * TILE_SIZE + col;
+                        let py = tile_y * TILE_SIZE + row;
+                        let i = (py * WIDTH + px) * 4;
+                        rgba[i] = gray;
+                        rgba[i + 1] = gray;
+                        rgba[i + 2] = gray;
+                        rgba[i + 3] = 255;
+                    }
+                }
+            }
+        }
+
+        rgba
+    }
+
     /// Check if camera image is ready.
     pub fn is_camera_image_ready(&self) -> bool {
         self.camera_image_ready
+    }
+
+    /// Check if the active capture buffer has changed since last clear.
+    pub fn is_camera_capture_dirty(&self) -> bool {
+        self.camera_capture_dirty
+    }
+
+    /// Clear the capture dirty flag.
+    pub fn clear_camera_capture_dirty(&mut self) {
+        self.camera_capture_dirty = false;
+    }
+
+    /// Get a reference to the raw SRAM for the active capture buffer (slot 0).
+    /// Returns the 3,584-byte 2bpp tile region at offset 0x0100.
+    pub fn camera_capture_sram(&self) -> &[u8] {
+        const PHOTO_BYTES: usize = 128 / 8 * 112 / 8 * 16; // 3584
+        let end = (0x0100 + PHOTO_BYTES).min(self.cartridge_ram.len());
+        &self.cartridge_ram[0x0100..end]
     }
 
     /// Get current memory state for debugging.

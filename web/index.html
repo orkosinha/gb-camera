@@ -42,6 +42,16 @@
         <input type="file" id="load-save" accept=".sav">
     </p>
 
+    <div id="camera-live" style="display: none;">
+        <h2>Camera Live View</h2>
+        <canvas id="live-capture" width="128" height="112" style="width: 256px; height: 224px; background: #000;"></canvas>
+    </div>
+
+    <div id="gallery" style="display: none;">
+        <h2>Camera Gallery</h2>
+        <div id="gallery-grid" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
+    </div>
+
     <script type="module" src="bundle.js"></script>
 
 </body>

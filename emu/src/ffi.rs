@@ -26,7 +26,10 @@ pub struct GameBoyHandle {
     interrupts: InterruptController,
     joypad: Joypad,
     frame_buffer: Box<[u8; 160 * 144 * 4]>,
+    camera_live_buffer: Box<[u8; 128 * 112 * 4]>,
     frame_count: u32,
+    total_cycles: u64,
+    instruction_count: u64,
 }
 
 impl GameBoyHandle {
@@ -39,7 +42,10 @@ impl GameBoyHandle {
             interrupts: InterruptController::new(),
             joypad: Joypad::new(),
             frame_buffer: Box::new([0; 160 * 144 * 4]),
+            camera_live_buffer: Box::new([0; 128 * 112 * 4]),
             frame_count: 0,
+            total_cycles: 0,
+            instruction_count: 0,
         }
     }
 
@@ -60,8 +66,10 @@ impl GameBoyHandle {
             self.ppu.tick(cycles, &mut self.memory, &self.interrupts);
 
             cycles_elapsed += cycles;
+            self.instruction_count += 1;
         }
 
+        self.total_cycles += cycles_elapsed as u64;
         self.frame_count += 1;
         self.render_frame();
     }
@@ -93,6 +101,44 @@ impl GameBoyHandle {
 
     fn is_camera_cartridge(&self) -> bool {
         matches!(self.memory.get_mbc_type(), crate::memory::MbcType::PocketCamera)
+    }
+
+    fn is_camera_ready(&self) -> bool {
+        self.memory.is_camera_image_ready()
+    }
+
+    fn update_camera_live(&mut self) -> bool {
+        if !self.memory.is_camera_capture_dirty() {
+            return false;
+        }
+        self.memory.clear_camera_capture_dirty();
+
+        let sram = self.memory.camera_capture_sram();
+        let palette: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
+        let buf = &mut *self.camera_live_buffer;
+
+        for tile_y in 0..14 {
+            for tile_x in 0..16 {
+                let tile_offset = (tile_y * 16 + tile_x) * 16;
+                for row in 0..8 {
+                    let low = sram[tile_offset + row * 2];
+                    let high = sram[tile_offset + row * 2 + 1];
+                    for col in 0..8 {
+                        let bit = 7 - col;
+                        let color_idx = ((high >> bit) & 1) << 1 | ((low >> bit) & 1);
+                        let gray = palette[color_idx as usize];
+                        let px = tile_x * 8 + col;
+                        let py = tile_y * 8 + row;
+                        let i = (py * 128 + px) * 4;
+                        buf[i] = gray;
+                        buf[i + 1] = gray;
+                        buf[i + 2] = gray;
+                        buf[i + 3] = 255;
+                    }
+                }
+            }
+        }
+        true
     }
 }
 
@@ -225,6 +271,83 @@ pub extern "C" fn gb_is_camera_cartridge(handle: *const c_void) -> bool {
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
         gb.is_camera_cartridge()
+    }
+}
+
+/// Check if the camera has image data ready for capture.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_is_camera_ready(handle: *const c_void) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    unsafe {
+        let gb = &*(handle as *const GameBoyHandle);
+        gb.is_camera_ready()
+    }
+}
+
+/// Update the camera live view buffer from the active capture SRAM.
+/// Returns true if the buffer was updated (i.e. capture data changed since last call).
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_update_camera_live(handle: *mut c_void) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    unsafe {
+        let gb = &mut *(handle as *mut GameBoyHandle);
+        gb.update_camera_live()
+    }
+}
+
+/// Get a pointer to the camera live view buffer (128x112 RGBA pixels).
+/// The buffer is owned by the emulator and valid until the next call or destruction.
+/// Returns NULL if handle is invalid.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_camera_live_ptr(handle: *const c_void) -> *const u8 {
+    if handle.is_null() {
+        return ptr::null();
+    }
+
+    unsafe {
+        let gb = &*(handle as *const GameBoyHandle);
+        gb.camera_live_buffer.as_ptr()
+    }
+}
+
+/// Get the camera live view buffer size in bytes (always 128 * 112 * 4 = 57344).
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_camera_live_len() -> usize {
+    128 * 112 * 4
+}
+
+/// Decode a GB Camera saved photo slot to RGBA pixel data.
+/// Slots 1-30 = saved photos. Writes up to `buffer_len` bytes into `buffer`.
+/// Returns the number of bytes written, or 0 if the slot is empty/unoccupied.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_decode_camera_photo(
+    handle: *const c_void,
+    slot: u8,
+    buffer: *mut u8,
+    buffer_len: usize,
+) -> usize {
+    if handle.is_null() || buffer.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let gb = &*(handle as *const GameBoyHandle);
+        let rgba = gb.memory.decode_camera_photo(slot);
+        if rgba.is_empty() {
+            return 0;
+        }
+
+        let copy_len = rgba.len().min(buffer_len);
+        if copy_len > 0 {
+            ptr::copy_nonoverlapping(rgba.as_ptr(), buffer, copy_len);
+        }
+        copy_len
     }
 }
 

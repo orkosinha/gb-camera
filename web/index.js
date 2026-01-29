@@ -24,6 +24,11 @@ const SMOOTHING_FACTOR = 0.7;  // Blend 70% new frame, 30% previous frame
 // Current ROM name for save file naming
 let currentRomName = 'game';
 
+// Gallery and live view
+let galleryInterval = null;
+let liveCtx = null;
+let liveImageData = null;
+
 const FRAME_DURATION = 1000 / 59.73; // ~16.74ms per frame
 const SCALE = 3;
 
@@ -154,6 +159,84 @@ function stopWebcam() {
     }
     webcamEnabled = false;
     debugLog('Webcam stopped');
+}
+
+// Live view: update active capture buffer via shared memory (zero-copy)
+function updateLiveView() {
+    if (!emulator || !liveCtx) return;
+
+    // Only decode if capture buffer changed since last call
+    if (!emulator.update_camera_live()) return;
+
+    const ptr = emulator.camera_live_ptr();
+    const len = emulator.camera_live_len();
+    const rgba = new Uint8Array(wasmMemory.buffer, ptr, len);
+
+    if (!liveImageData) {
+        liveImageData = liveCtx.createImageData(128, 112);
+    }
+    liveImageData.data.set(rgba);
+    liveCtx.putImageData(liveImageData, 0, 0);
+}
+
+// Gallery: decode and display only occupied saved photo slots (1-30) from SRAM
+function updateGallery() {
+    if (!emulator) return;
+
+    const grid = document.getElementById('gallery-grid');
+    if (!grid) return;
+
+    grid.innerHTML = '';
+
+    for (let slot = 1; slot <= 30; slot++) {
+        const rgba = emulator.decode_camera_photo(slot);
+        if (rgba.length === 0) continue;
+
+        const container = document.createElement('div');
+        const label = document.createElement('div');
+        label.textContent = `#${slot}`;
+        label.style.cssText = 'font-family: monospace; font-size: 12px; text-align: center;';
+
+        const c = document.createElement('canvas');
+        c.width = 128;
+        c.height = 112;
+        c.style.cssText = 'width: 128px; height: 112px; background: #000; display: block;';
+
+        container.appendChild(label);
+        container.appendChild(c);
+        grid.appendChild(container);
+
+        const ctx2 = c.getContext('2d');
+        const img = new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), 128, 112);
+        ctx2.putImageData(img, 0, 0);
+    }
+}
+
+function startGallery() {
+    // Live view
+    const liveSection = document.getElementById('camera-live');
+    if (liveSection) liveSection.style.display = 'block';
+    const liveCanvas = document.getElementById('live-capture');
+    if (liveCanvas) liveCtx = liveCanvas.getContext('2d');
+
+    // Saved photos gallery
+    const gallery = document.getElementById('gallery');
+    if (gallery) gallery.style.display = 'block';
+    updateGallery();
+    galleryInterval = setInterval(updateGallery, 2000);
+}
+
+function stopGallery() {
+    if (galleryInterval) {
+        clearInterval(galleryInterval);
+        galleryInterval = null;
+    }
+    liveCtx = null;
+    liveImageData = null;
+    const liveSection = document.getElementById('camera-live');
+    if (liveSection) liveSection.style.display = 'none';
+    const gallery = document.getElementById('gallery');
+    if (gallery) gallery.style.display = 'none';
 }
 
 // Download save file (cartridge RAM)
@@ -297,6 +380,9 @@ function setupFileInput() {
                 } else {
                     debugLog('WARNING: Webcam not available - camera captures will be blank');
                 }
+                startGallery();
+            } else {
+                stopGallery();
             }
 
             // Log initial VRAM info
@@ -361,6 +447,7 @@ function stopEmulation() {
         cancelAnimationFrame(animationId);
         animationId = null;
     }
+    stopGallery();
 }
 
 function runFrame(timestamp) {
@@ -405,6 +492,11 @@ function runFrame(timestamp) {
 
         imageData.data.set(frameBuffer);
         ctx.putImageData(imageData, 0, 0);
+
+        // Update live camera view every frame
+        if (isGameBoyCamera) {
+            updateLiveView();
+        }
     }
 
     animationId = requestAnimationFrame(runFrame);

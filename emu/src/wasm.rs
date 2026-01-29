@@ -30,6 +30,7 @@ pub struct GameBoy {
     interrupts: InterruptController,
     joypad: Joypad,
     frame_buffer: Box<[u8; 160 * 144 * 4]>,
+    camera_live_buffer: Box<[u8; 128 * 112 * 4]>,
     // Debug tracking
     frame_count: u32,
     total_cycles: u64,
@@ -49,6 +50,7 @@ impl GameBoy {
             interrupts: InterruptController::new(),
             joypad: Joypad::new(),
             frame_buffer: Box::new([0; 160 * 144 * 4]),
+            camera_live_buffer: Box::new([0; 128 * 112 * 4]),
             frame_count: 0,
             total_cycles: 0,
             instruction_count: 0,
@@ -179,6 +181,63 @@ impl GameBoy {
     /// Check if camera image is ready for capture.
     pub fn is_camera_ready(&self) -> bool {
         self.memory.is_camera_image_ready()
+    }
+
+    /// Check if the loaded ROM is a Game Boy Camera cartridge.
+    pub fn is_camera(&self) -> bool {
+        self.memory.get_mbc_type() == crate::memory::MbcType::PocketCamera
+    }
+
+    /// Update the camera live view buffer if the capture has changed.
+    /// Returns true if the buffer was updated.
+    pub fn update_camera_live(&mut self) -> bool {
+        if !self.memory.is_camera_capture_dirty() {
+            return false;
+        }
+        self.memory.clear_camera_capture_dirty();
+
+        let sram = self.memory.camera_capture_sram();
+        let palette: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
+        let buf = &mut *self.camera_live_buffer;
+
+        for tile_y in 0..14 {
+            for tile_x in 0..16 {
+                let tile_offset = (tile_y * 16 + tile_x) * 16;
+                for row in 0..8 {
+                    let low = sram[tile_offset + row * 2];
+                    let high = sram[tile_offset + row * 2 + 1];
+                    for col in 0..8 {
+                        let bit = 7 - col;
+                        let color_idx = ((high >> bit) & 1) << 1 | ((low >> bit) & 1);
+                        let gray = palette[color_idx as usize];
+                        let px = tile_x * 8 + col;
+                        let py = tile_y * 8 + row;
+                        let i = (py * 128 + px) * 4;
+                        buf[i] = gray;
+                        buf[i + 1] = gray;
+                        buf[i + 2] = gray;
+                        buf[i + 3] = 255;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Pointer to the camera live view RGBA buffer (128×112×4 bytes).
+    pub fn camera_live_ptr(&self) -> *const u8 {
+        self.camera_live_buffer.as_ptr()
+    }
+
+    /// Length of the camera live view buffer.
+    pub fn camera_live_len(&self) -> usize {
+        self.camera_live_buffer.len()
+    }
+
+    /// Decode a GB Camera saved photo slot to RGBA pixel data.
+    /// Slots 1-30 = saved photos. Returns empty if slot is unoccupied.
+    pub fn decode_camera_photo(&self, slot: u8) -> Vec<u8> {
+        self.memory.decode_camera_photo(slot)
     }
 
     /// Get serial output as a string (for test ROM debugging).
