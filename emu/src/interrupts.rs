@@ -1,7 +1,19 @@
 use crate::memory::Memory;
 
+/// Game Boy interrupt types, ordered by hardware priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Interrupt {
+    VBlank = 0,
+    LcdStat = 1,
+    Timer = 2,
+    Serial = 3,
+    Joypad = 4,
+}
+
 /// Interrupt controller that operates directly on memory's IF register (0xFF0F).
 /// This ensures the CPU always sees the correct interrupt state.
+#[derive(Default)]
 pub struct InterruptController;
 
 impl InterruptController {
@@ -9,48 +21,18 @@ impl InterruptController {
         InterruptController
     }
 
+    /// Set the interrupt flag bit for the given interrupt type.
     #[inline]
-    pub fn request_vblank(&self, memory: &mut Memory) {
+    pub fn request(&self, interrupt: Interrupt, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg | 0x01);
+        memory.write_io_direct(0x0F, if_reg | (1 << interrupt as u8));
     }
 
+    /// Clear the interrupt flag bit for the given interrupt type.
     #[inline]
-    pub fn request_lcd_stat(&self, memory: &mut Memory) {
+    pub fn clear(&self, interrupt: Interrupt, memory: &mut Memory) {
         let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg | 0x02);
-    }
-
-    #[inline]
-    pub fn request_timer(&self, memory: &mut Memory) {
-        let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg | 0x04);
-    }
-
-    /// Request serial interrupt. Currently unused as serial is not implemented.
-    #[allow(dead_code)]
-    #[inline]
-    pub fn request_serial(&self, memory: &mut Memory) {
-        let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg | 0x08);
-    }
-
-    #[inline]
-    pub fn request_joypad(&self, memory: &mut Memory) {
-        let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg | 0x10);
-    }
-
-    #[inline]
-    pub fn clear(&self, memory: &mut Memory, bit: u8) {
-        let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg & !(1 << bit));
-    }
-}
-
-impl Default for InterruptController {
-    fn default() -> Self {
-        Self::new()
+        memory.write_io_direct(0x0F, if_reg & !(1 << interrupt as u8));
     }
 }
 
@@ -64,19 +46,19 @@ mod tests {
         let mut mem = Memory::new();
         mem.write_io_direct(0x0F, 0x00);
 
-        ic.request_vblank(&mut mem);
+        ic.request(Interrupt::VBlank, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F) & 0x01, 0x01);
 
-        ic.request_lcd_stat(&mut mem);
+        ic.request(Interrupt::LcdStat, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F) & 0x02, 0x02);
 
-        ic.request_timer(&mut mem);
+        ic.request(Interrupt::Timer, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F) & 0x04, 0x04);
 
-        ic.request_serial(&mut mem);
+        ic.request(Interrupt::Serial, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F) & 0x08, 0x08);
 
-        ic.request_joypad(&mut mem);
+        ic.request(Interrupt::Joypad, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F) & 0x10, 0x10);
     }
 
@@ -86,10 +68,10 @@ mod tests {
         let mut mem = Memory::new();
         mem.write_io_direct(0x0F, 0x1F); // All interrupts set
 
-        ic.clear(&mut mem, 0); // Clear VBlank
+        ic.clear(Interrupt::VBlank, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F), 0x1E);
 
-        ic.clear(&mut mem, 2); // Clear Timer
+        ic.clear(Interrupt::Timer, &mut mem);
         assert_eq!(mem.read_io_direct(0x0F), 0x1A);
     }
 }

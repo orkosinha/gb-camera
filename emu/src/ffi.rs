@@ -9,7 +9,7 @@ use std::slice;
 
 use crate::bus::MemoryBus;
 use crate::cpu::Cpu;
-use crate::interrupts::InterruptController;
+use crate::interrupts::{Interrupt, InterruptController};
 use crate::joypad::Joypad;
 use crate::memory::Memory;
 use crate::ppu::Ppu;
@@ -89,9 +89,11 @@ impl GameBoyHandle {
     }
 
     fn set_button(&mut self, button: u8, pressed: bool) {
-        self.joypad.set_button(button, pressed);
-        if pressed {
-            self.interrupts.request_joypad(&mut self.memory);
+        if let Some(btn) = crate::joypad::Button::from_u8(button) {
+            self.joypad.set_button(btn, pressed);
+            if pressed {
+                self.interrupts.request(Interrupt::Joypad, &mut self.memory);
+            }
         }
     }
 
@@ -415,14 +417,14 @@ pub extern "C" fn gb_load_save_data(handle: *mut c_void, data: *const u8, len: u
 }
 
 // Button constants for Swift
-pub const GB_BUTTON_A: u8 = 0;
-pub const GB_BUTTON_B: u8 = 1;
-pub const GB_BUTTON_SELECT: u8 = 2;
-pub const GB_BUTTON_START: u8 = 3;
-pub const GB_BUTTON_RIGHT: u8 = 4;
-pub const GB_BUTTON_LEFT: u8 = 5;
-pub const GB_BUTTON_UP: u8 = 6;
-pub const GB_BUTTON_DOWN: u8 = 7;
+pub const GB_BUTTON_A: u8 = crate::joypad::Button::A as u8;
+pub const GB_BUTTON_B: u8 = crate::joypad::Button::B as u8;
+pub const GB_BUTTON_SELECT: u8 = crate::joypad::Button::Select as u8;
+pub const GB_BUTTON_START: u8 = crate::joypad::Button::Start as u8;
+pub const GB_BUTTON_RIGHT: u8 = crate::joypad::Button::Right as u8;
+pub const GB_BUTTON_LEFT: u8 = crate::joypad::Button::Left as u8;
+pub const GB_BUTTON_UP: u8 = crate::joypad::Button::Up as u8;
+pub const GB_BUTTON_DOWN: u8 = crate::joypad::Button::Down as u8;
 
 // Screen dimensions
 pub const GB_SCREEN_WIDTH: u32 = 160;

@@ -1,11 +1,12 @@
 use std::fmt;
 
-use crate::interrupts::InterruptController;
+use crate::interrupts::{Interrupt, InterruptController};
 use crate::memory::Memory;
 
 /// Debug state for PPU inspection.
 pub struct PpuDebugState {
     pub mode: u8,
+    pub mode_name: &'static str,
     pub line: u8,
     pub cycles: u32,
     pub window_line_counter: u8,
@@ -13,18 +14,22 @@ pub struct PpuDebugState {
 
 impl fmt::Display for PpuDebugState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mode_name = match self.mode {
-            0 => "HBLANK",
-            1 => "VBLANK",
-            2 => "OAM",
-            3 => "DRAW",
-            _ => "???",
-        };
         write!(
             f,
             "mode={}({}) line={} cycles={} win_line={}",
-            self.mode, mode_name, self.line, self.cycles, self.window_line_counter
+            self.mode, self.mode_name, self.line, self.cycles, self.window_line_counter
         )
+    }
+}
+
+impl PpuMode {
+    fn name(self) -> &'static str {
+        match self {
+            PpuMode::HBlank => "HBLANK",
+            PpuMode::VBlank => "VBLANK",
+            PpuMode::OamScan => "OAM",
+            PpuMode::Drawing => "DRAW",
+        }
     }
 }
 
@@ -33,11 +38,15 @@ const SCREEN_HEIGHT: usize = 144;
 const VBLANK_LINES: usize = 10;
 const TOTAL_LINES: usize = SCREEN_HEIGHT + VBLANK_LINES;
 
-// PPU modes
-const MODE_HBLANK: u8 = 0;
-const MODE_VBLANK: u8 = 1;
-const MODE_OAM_SCAN: u8 = 2;
-const MODE_DRAWING: u8 = 3;
+/// PPU operating modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum PpuMode {
+    HBlank = 0,
+    VBlank = 1,
+    OamScan = 2,
+    Drawing = 3,
+}
 
 // Mode durations in cycles
 const OAM_SCAN_CYCLES: u32 = 80;
@@ -47,7 +56,7 @@ const SCANLINE_CYCLES: u32 = 456;
 
 pub struct Ppu {
     buffer: Box<[u8; SCREEN_WIDTH * SCREEN_HEIGHT]>,
-    mode: u8,
+    mode: PpuMode,
     cycles: u32,
     line: u8,
     window_line_counter: u8,
@@ -57,7 +66,7 @@ impl Ppu {
     pub fn new() -> Self {
         Ppu {
             buffer: Box::new([0; SCREEN_WIDTH * SCREEN_HEIGHT]),
-            mode: MODE_OAM_SCAN,
+            mode: PpuMode::OamScan,
             cycles: 0,
             line: 0,
             window_line_counter: 0,
@@ -69,7 +78,7 @@ impl Ppu {
 
         // LCD disabled - keep the last frame visible (don't clear buffer)
         if lcdc & 0x80 == 0 {
-            self.mode = MODE_HBLANK;
+            self.mode = PpuMode::HBlank;
             self.cycles = 0;
             self.line = 0;
             memory.write_io_direct(0x44, 0); // LY = 0
@@ -80,16 +89,16 @@ impl Ppu {
         self.cycles += cycles;
 
         match self.mode {
-            MODE_OAM_SCAN => {
+            PpuMode::OamScan => {
                 if self.cycles >= OAM_SCAN_CYCLES {
                     self.cycles -= OAM_SCAN_CYCLES;
-                    self.mode = MODE_DRAWING;
+                    self.mode = PpuMode::Drawing;
                 }
             }
-            MODE_DRAWING => {
+            PpuMode::Drawing => {
                 if self.cycles >= DRAWING_CYCLES {
                     self.cycles -= DRAWING_CYCLES;
-                    self.mode = MODE_HBLANK;
+                    self.mode = PpuMode::HBlank;
 
                     // Render scanline
                     self.render_scanline(memory);
@@ -97,11 +106,11 @@ impl Ppu {
                     // STAT interrupt for HBLANK
                     let stat = memory.read_io_direct(0x41);
                     if stat & 0x08 != 0 {
-                        interrupts.request_lcd_stat(memory);
+                        interrupts.request(Interrupt::LcdStat, memory);
                     }
                 }
             }
-            MODE_HBLANK => {
+            PpuMode::HBlank => {
                 if self.cycles >= HBLANK_CYCLES {
                     self.cycles -= HBLANK_CYCLES;
                     self.line += 1;
@@ -111,39 +120,39 @@ impl Ppu {
                     self.check_lyc_coincidence(memory, interrupts);
 
                     if self.line >= SCREEN_HEIGHT as u8 {
-                        self.mode = MODE_VBLANK;
+                        self.mode = PpuMode::VBlank;
                         self.window_line_counter = 0;
-                        interrupts.request_vblank(memory);
+                        interrupts.request(Interrupt::VBlank, memory);
 
                         // STAT interrupt for VBLANK
                         let stat = memory.read_io_direct(0x41);
                         if stat & 0x10 != 0 {
-                            interrupts.request_lcd_stat(memory);
+                            interrupts.request(Interrupt::LcdStat, memory);
                         }
                     } else {
-                        self.mode = MODE_OAM_SCAN;
+                        self.mode = PpuMode::OamScan;
 
                         // STAT interrupt for OAM
                         let stat = memory.read_io_direct(0x41);
                         if stat & 0x20 != 0 {
-                            interrupts.request_lcd_stat(memory);
+                            interrupts.request(Interrupt::LcdStat, memory);
                         }
                     }
                 }
             }
-            MODE_VBLANK => {
+            PpuMode::VBlank => {
                 if self.cycles >= SCANLINE_CYCLES {
                     self.cycles -= SCANLINE_CYCLES;
                     self.line += 1;
 
                     if self.line >= TOTAL_LINES as u8 {
                         self.line = 0;
-                        self.mode = MODE_OAM_SCAN;
+                        self.mode = PpuMode::OamScan;
 
                         // STAT interrupt for OAM
                         let stat = memory.read_io_direct(0x41);
                         if stat & 0x20 != 0 {
-                            interrupts.request_lcd_stat(memory);
+                            interrupts.request(Interrupt::LcdStat, memory);
                         }
                     }
 
@@ -151,12 +160,11 @@ impl Ppu {
                     self.check_lyc_coincidence(memory, interrupts);
                 }
             }
-            _ => {}
         }
 
         // Update STAT register mode bits
         let mut stat = memory.read_io_direct(0x41);
-        stat = (stat & 0xFC) | self.mode;
+        stat = (stat & 0xFC) | self.mode as u8;
         memory.write_io_direct(0x41, stat);
     }
 
@@ -167,7 +175,7 @@ impl Ppu {
         if self.line == lyc {
             stat |= 0x04; // Set coincidence flag
             if stat & 0x40 != 0 {
-                interrupts.request_lcd_stat(memory);
+                interrupts.request(Interrupt::LcdStat, memory);
             }
         } else {
             stat &= !0x04; // Clear coincidence flag
@@ -390,7 +398,8 @@ impl Ppu {
     /// Get current PPU state for debugging.
     pub fn get_debug_state(&self) -> PpuDebugState {
         PpuDebugState {
-            mode: self.mode,
+            mode: self.mode as u8,
+            mode_name: self.mode.name(),
             line: self.line,
             cycles: self.cycles,
             window_line_counter: self.window_line_counter,
@@ -416,7 +425,7 @@ mod tests {
     #[test]
     fn test_ppu_initial_state() {
         let ppu = Ppu::new();
-        assert_eq!(ppu.mode, MODE_OAM_SCAN);
+        assert_eq!(ppu.mode, PpuMode::OamScan);
         assert_eq!(ppu.line, 0);
         assert_eq!(ppu.cycles, 0);
     }

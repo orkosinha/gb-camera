@@ -4,7 +4,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::bus::MemoryBus;
 use crate::cpu::Cpu;
-use crate::interrupts::InterruptController;
+use crate::interrupts::{Interrupt, InterruptController};
 use crate::joypad::Joypad;
 use crate::log::LogCategory;
 use crate::memory::Memory;
@@ -155,9 +155,11 @@ impl GameBoy {
     }
 
     pub fn set_button(&mut self, button: u8, pressed: bool) {
-        self.joypad.set_button(button, pressed);
-        if pressed {
-            self.interrupts.request_joypad(&mut self.memory);
+        if let Some(btn) = crate::joypad::Button::from_u8(button) {
+            self.joypad.set_button(btn, pressed);
+            if pressed {
+                self.interrupts.request(Interrupt::Joypad, &mut self.memory);
+            }
         }
     }
 

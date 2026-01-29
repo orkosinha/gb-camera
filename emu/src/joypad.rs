@@ -14,15 +14,37 @@ pub struct Joypad {
     select_dpad: bool,
 }
 
-// Button indices for set_button
-pub const BUTTON_A: u8 = 0;
-pub const BUTTON_B: u8 = 1;
-pub const BUTTON_SELECT: u8 = 2;
-pub const BUTTON_START: u8 = 3;
-pub const BUTTON_RIGHT: u8 = 4;
-pub const BUTTON_LEFT: u8 = 5;
-pub const BUTTON_UP: u8 = 6;
-pub const BUTTON_DOWN: u8 = 7;
+/// Game Boy joypad buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Button {
+    A = 0,
+    B = 1,
+    Select = 2,
+    Start = 3,
+    Right = 4,
+    Left = 5,
+    Up = 6,
+    Down = 7,
+}
+
+impl Button {
+    /// Convert a raw `u8` button index to a `Button`.
+    /// Returns `None` if the value is out of range.
+    pub fn from_u8(value: u8) -> Option<Button> {
+        match value {
+            0 => Some(Button::A),
+            1 => Some(Button::B),
+            2 => Some(Button::Select),
+            3 => Some(Button::Start),
+            4 => Some(Button::Right),
+            5 => Some(Button::Left),
+            6 => Some(Button::Up),
+            7 => Some(Button::Down),
+            _ => None,
+        }
+    }
+}
 
 impl Joypad {
     pub fn new() -> Self {
@@ -40,17 +62,16 @@ impl Joypad {
         }
     }
 
-    pub fn set_button(&mut self, button: u8, pressed: bool) {
+    pub fn set_button(&mut self, button: Button, pressed: bool) {
         match button {
-            BUTTON_A => self.a = pressed,
-            BUTTON_B => self.b = pressed,
-            BUTTON_SELECT => self.select = pressed,
-            BUTTON_START => self.start = pressed,
-            BUTTON_RIGHT => self.right = pressed,
-            BUTTON_LEFT => self.left = pressed,
-            BUTTON_UP => self.up = pressed,
-            BUTTON_DOWN => self.down = pressed,
-            _ => {}
+            Button::A => self.a = pressed,
+            Button::B => self.b = pressed,
+            Button::Select => self.select = pressed,
+            Button::Start => self.start = pressed,
+            Button::Right => self.right = pressed,
+            Button::Left => self.left = pressed,
+            Button::Up => self.up = pressed,
+            Button::Down => self.down = pressed,
         }
     }
 

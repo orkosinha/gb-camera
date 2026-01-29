@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::bus::MemoryBus;
-use crate::interrupts::InterruptController;
+use crate::interrupts::{Interrupt, InterruptController};
 use crate::log::LogCategory;
 use crate::log_info;
 
@@ -158,20 +158,20 @@ impl Cpu {
         self.ime = false;
 
         // Priority: VBlank > LCD STAT > Timer > Serial > Joypad
-        let (bit, vector) = if pending & 0x01 != 0 {
-            (0, 0x0040) // VBlank
+        let (interrupt, vector) = if pending & 0x01 != 0 {
+            (Interrupt::VBlank, 0x0040)
         } else if pending & 0x02 != 0 {
-            (1, 0x0048) // LCD STAT
+            (Interrupt::LcdStat, 0x0048)
         } else if pending & 0x04 != 0 {
-            (2, 0x0050) // Timer
+            (Interrupt::Timer, 0x0050)
         } else if pending & 0x08 != 0 {
-            (3, 0x0058) // Serial
+            (Interrupt::Serial, 0x0058)
         } else {
-            (4, 0x0060) // Joypad
+            (Interrupt::Joypad, 0x0060)
         };
 
         // Clear interrupt flag
-        interrupts.clear(bus.memory, bit);
+        interrupts.clear(interrupt, bus.memory);
 
         // Push PC and jump to handler
         self.push_word(bus, self.pc);

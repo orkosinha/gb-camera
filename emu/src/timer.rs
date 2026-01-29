@@ -1,4 +1,4 @@
-use crate::interrupts::InterruptController;
+use crate::interrupts::{Interrupt, InterruptController};
 use crate::memory::Memory;
 
 pub struct Timer {
@@ -33,7 +33,7 @@ impl Timer {
             self.overflow_cycles -= 1;
             if self.overflow_cycles == 0 {
                 self.tima = self.tma;
-                interrupts.request_timer(memory);
+                interrupts.request(Interrupt::Timer, memory);
             }
         }
 
