@@ -192,15 +192,13 @@ impl Ppu {
             return;
         }
 
-        // Clear scanline
-        let start = line * SCREEN_WIDTH;
-        for pixel in &mut self.buffer[start..start + SCREEN_WIDTH] {
-            *pixel = 0;
-        }
-
-        // Background enabled
+        // Background
         if lcdc & 0x01 != 0 {
             self.render_background(memory, line);
+        } else {
+            // Background disabled — clear scanline
+            let start = line * SCREEN_WIDTH;
+            self.buffer[start..start + SCREEN_WIDTH].fill(0);
         }
 
         // Window enabled
@@ -227,31 +225,29 @@ impl Ppu {
         let y = (line + scy) & 0xFF;
         let tile_row = y / 8;
         let pixel_row = y % 8;
+        let pixel_row_offset = pixel_row as u16 * 2;
+
+        let buf = &mut self.buffer[line * SCREEN_WIDTH..][..SCREEN_WIDTH];
 
         for screen_x in 0..SCREEN_WIDTH {
             let x = (screen_x + scx) & 0xFF;
-            let tile_col = x / 8;
-            let pixel_col = 7 - (x % 8);
+            let tile_col = x >> 3;
+            let pixel_col = 7 - (x & 7);
 
-            let tile_map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
-            let tile_idx = memory.read(tile_map_addr);
+            let tile_idx = memory.read(tile_map_base + (tile_row * 32 + tile_col) as u16);
 
             let tile_data_addr = if signed_addressing {
                 let signed_idx = tile_idx as i8 as i16;
-                (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row as i16 * 2) as u16
+                (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row_offset as i16) as u16
             } else {
-                tile_data_base + tile_idx as u16 * 16 + pixel_row as u16 * 2
+                tile_data_base + tile_idx as u16 * 16 + pixel_row_offset
             };
 
             let low = memory.read(tile_data_addr);
             let high = memory.read(tile_data_addr + 1);
 
-            let color_bit_low = (low >> pixel_col) & 1;
-            let color_bit_high = (high >> pixel_col) & 1;
-            let color_idx = (color_bit_high << 1) | color_bit_low;
-
-            let color = (bgp >> (color_idx * 2)) & 0x03;
-            self.buffer[line * SCREEN_WIDTH + screen_x] = color;
+            let color_idx = ((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1);
+            buf[screen_x] = (bgp >> (color_idx * 2)) & 0x03;
         }
     }
 
@@ -272,33 +268,30 @@ impl Ppu {
         let window_y = self.window_line_counter as usize;
         let tile_row = window_y / 8;
         let pixel_row = window_y % 8;
+        let pixel_row_offset = pixel_row as u16 * 2;
 
         let start_x = wx.max(0) as usize;
+        let buf = &mut self.buffer[line * SCREEN_WIDTH..][..SCREEN_WIDTH];
 
         for screen_x in start_x..SCREEN_WIDTH {
             let window_x = (screen_x as i16 - wx) as usize;
-            let tile_col = window_x / 8;
-            let pixel_col = 7 - (window_x % 8);
+            let tile_col = window_x >> 3;
+            let pixel_col = 7 - (window_x & 7);
 
-            let tile_map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
-            let tile_idx = memory.read(tile_map_addr);
+            let tile_idx = memory.read(tile_map_base + (tile_row * 32 + tile_col) as u16);
 
             let tile_data_addr = if signed_addressing {
                 let signed_idx = tile_idx as i8 as i16;
-                (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row as i16 * 2) as u16
+                (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row_offset as i16) as u16
             } else {
-                tile_data_base + tile_idx as u16 * 16 + pixel_row as u16 * 2
+                tile_data_base + tile_idx as u16 * 16 + pixel_row_offset
             };
 
             let low = memory.read(tile_data_addr);
             let high = memory.read(tile_data_addr + 1);
 
-            let color_bit_low = (low >> pixel_col) & 1;
-            let color_bit_high = (high >> pixel_col) & 1;
-            let color_idx = (color_bit_high << 1) | color_bit_low;
-
-            let color = (bgp >> (color_idx * 2)) & 0x03;
-            self.buffer[line * SCREEN_WIDTH + screen_x] = color;
+            let color_idx = ((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1);
+            buf[screen_x] = (bgp >> (color_idx * 2)) & 0x03;
         }
 
         self.window_line_counter += 1;
@@ -309,36 +302,37 @@ impl Ppu {
         let sprite_height: i16 = if lcdc & 0x04 != 0 { 16 } else { 8 };
         let oam = memory.get_oam();
 
-        // Collect sprites on this line (max 10)
-        // Store (x, screen_y, tile, flags) where screen_y is already adjusted
-        let mut sprites: Vec<(u8, i16, u8, u8)> = Vec::with_capacity(10);
+        // Cache palette registers outside the sprite loop
+        let obp0 = memory.read_io_direct(0x48);
+        let obp1 = memory.read_io_direct(0x49);
+
+        // Collect sprites on this line (max 10, stack-allocated)
+        let mut sprites: [(u8, i16, u8, u8); 10] = [(0, 0, 0, 0); 10];
+        let mut sprite_count: usize = 0;
 
         for i in 0..40 {
             let offset = i * 4;
             let oam_y = oam[offset] as i16;
-            let screen_y = oam_y - 16; // Convert OAM Y to screen Y
+            let screen_y = oam_y - 16;
             let x = oam[offset + 1];
             let tile = oam[offset + 2];
             let flags = oam[offset + 3];
 
             if (line as i16) >= screen_y && (line as i16) < screen_y + sprite_height {
-                sprites.push((x, screen_y, tile, flags));
-                if sprites.len() >= 10 {
+                sprites[sprite_count] = (x, screen_y, tile, flags);
+                sprite_count += 1;
+                if sprite_count >= 10 {
                     break;
                 }
             }
         }
 
         // Sort by X coordinate (lower X = higher priority)
-        sprites.sort_by(|a, b| a.0.cmp(&b.0));
+        sprites[..sprite_count].sort_by(|a, b| a.0.cmp(&b.0));
 
         // Render sprites (reverse order so higher priority overwrites)
-        for (x, screen_y, mut tile, flags) in sprites.into_iter().rev() {
-            let palette = if flags & 0x10 != 0 {
-                memory.read_io_direct(0x49) // OBP1
-            } else {
-                memory.read_io_direct(0x48) // OBP0
-            };
+        for &(x, screen_y, mut tile, flags) in sprites[..sprite_count].iter().rev() {
+            let palette = if flags & 0x10 != 0 { obp1 } else { obp0 };
 
             let flip_x = flags & 0x20 != 0;
             let flip_y = flags & 0x40 != 0;
@@ -362,16 +356,14 @@ impl Ppu {
             let low = memory.read(tile_addr);
             let high = memory.read(tile_addr + 1);
 
-            for pixel in 0..8 {
+            for pixel in 0..8i16 {
                 let screen_x = x as i16 - 8 + pixel;
                 if screen_x < 0 || screen_x >= SCREEN_WIDTH as i16 {
                     continue;
                 }
 
                 let bit = if flip_x { pixel } else { 7 - pixel };
-                let color_bit_low = (low >> bit) & 1;
-                let color_bit_high = (high >> bit) & 1;
-                let color_idx = (color_bit_high << 1) | color_bit_low;
+                let color_idx = ((high >> bit) & 1) << 1 | ((low >> bit) & 1);
 
                 // Color 0 is transparent for sprites
                 if color_idx == 0 {
@@ -385,8 +377,7 @@ impl Ppu {
                     continue;
                 }
 
-                let color = (palette >> (color_idx * 2)) & 0x03;
-                self.buffer[buffer_idx] = color;
+                self.buffer[buffer_idx] = (palette >> (color_idx * 2)) & 0x03;
             }
         }
     }
