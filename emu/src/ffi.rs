@@ -79,7 +79,7 @@ pub extern "C" fn gb_get_frame_buffer(handle: *const c_void) -> *const u8 {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.core.frame_buffer.as_ptr()
+        gb.core.frame_buffer.front().as_ptr()
     }
 }
 
@@ -186,7 +186,7 @@ pub extern "C" fn gb_camera_live_ptr(handle: *const c_void) -> *const u8 {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.core.camera_live_buffer.as_ptr()
+        gb.core.camera_live_buffer.front().as_ptr()
     }
 }
 

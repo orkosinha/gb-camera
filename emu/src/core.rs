@@ -12,6 +12,37 @@ use crate::ppu::Ppu;
 use crate::timer::Timer;
 
 const CYCLES_PER_FRAME: u32 = 70224;
+const FRAME_BUFFER_SIZE: usize = 160 * 144 * 4;
+const CAMERA_BUFFER_SIZE: usize = 128 * 112 * 4;
+
+pub(crate) struct DoubleBuffer<const N: usize> {
+    buffers: [Box<[u8; N]>; 2],
+    front: usize,
+}
+
+impl<const N: usize> DoubleBuffer<N> {
+    pub fn new() -> Self {
+        DoubleBuffer {
+            buffers: [Box::new([0u8; N]), Box::new([0u8; N])],
+            front: 0,
+        }
+    }
+
+    #[inline]
+    pub fn front(&self) -> &[u8; N] {
+        &self.buffers[self.front]
+    }
+
+    #[inline]
+    pub fn back_mut(&mut self) -> &mut [u8; N] {
+        &mut self.buffers[1 - self.front]
+    }
+
+    #[inline]
+    pub fn swap(&mut self) {
+        self.front = 1 - self.front;
+    }
+}
 
 pub(crate) struct GameBoyCore {
     pub(crate) cpu: Cpu,
@@ -20,8 +51,8 @@ pub(crate) struct GameBoyCore {
     pub(crate) timer: Timer,
     pub(crate) interrupts: InterruptController,
     pub(crate) joypad: Joypad,
-    pub(crate) frame_buffer: Box<[u8; 160 * 144 * 4]>,
-    pub(crate) camera_live_buffer: Box<[u8; 128 * 112 * 4]>,
+    pub(crate) frame_buffer: DoubleBuffer<FRAME_BUFFER_SIZE>,
+    pub(crate) camera_live_buffer: DoubleBuffer<CAMERA_BUFFER_SIZE>,
     pub(crate) frame_count: u32,
     pub(crate) total_cycles: u64,
     pub(crate) instruction_count: u64,
@@ -36,8 +67,8 @@ impl GameBoyCore {
             timer: Timer::new(),
             interrupts: InterruptController::new(),
             joypad: Joypad::new(),
-            frame_buffer: Box::new([0; 160 * 144 * 4]),
-            camera_live_buffer: Box::new([0; 128 * 112 * 4]),
+            frame_buffer: DoubleBuffer::new(),
+            camera_live_buffer: DoubleBuffer::new(),
             frame_count: 0,
             total_cycles: 0,
             instruction_count: 0,
@@ -81,15 +112,17 @@ impl GameBoyCore {
     fn render_frame(&mut self) {
         let ppu_buffer = self.ppu.get_buffer();
         let palette = [0xFFu8, 0xAA, 0x55, 0x00];
+        let back = self.frame_buffer.back_mut();
 
         for (i, &pixel) in ppu_buffer.iter().enumerate() {
             let gray = palette[(pixel & 0x03) as usize];
             let offset = i * 4;
-            self.frame_buffer[offset] = gray;
-            self.frame_buffer[offset + 1] = gray;
-            self.frame_buffer[offset + 2] = gray;
-            self.frame_buffer[offset + 3] = 255;
+            back[offset] = gray;
+            back[offset + 1] = gray;
+            back[offset + 2] = gray;
+            back[offset + 3] = 255;
         }
+        self.frame_buffer.swap();
     }
 
     pub(crate) fn set_button(&mut self, button: u8, pressed: bool) {
@@ -122,7 +155,7 @@ impl GameBoyCore {
 
         let sram = self.memory.camera_capture_sram();
         let palette: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
-        let buf = &mut *self.camera_live_buffer;
+        let buf = self.camera_live_buffer.back_mut();
 
         for tile_y in 0..14 {
             for tile_x in 0..16 {
@@ -145,6 +178,7 @@ impl GameBoyCore {
                 }
             }
         }
+        self.camera_live_buffer.swap();
         true
     }
 

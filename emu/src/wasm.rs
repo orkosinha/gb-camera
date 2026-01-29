@@ -85,11 +85,11 @@ impl GameBoy {
     }
 
     pub fn frame_buffer_ptr(&self) -> *const u8 {
-        self.core.frame_buffer.as_ptr()
+        self.core.frame_buffer.front().as_ptr()
     }
 
     pub fn frame_buffer_len(&self) -> usize {
-        self.core.frame_buffer.len()
+        self.core.frame_buffer.front().len()
     }
 
     pub fn set_button(&mut self, button: u8, pressed: bool) {
@@ -128,12 +128,12 @@ impl GameBoy {
 
     /// Pointer to the camera live view RGBA buffer (128x112x4 bytes).
     pub fn camera_live_ptr(&self) -> *const u8 {
-        self.core.camera_live_buffer.as_ptr()
+        self.core.camera_live_buffer.front().as_ptr()
     }
 
     /// Length of the camera live view buffer.
     pub fn camera_live_len(&self) -> usize {
-        self.core.camera_live_buffer.len()
+        self.core.camera_live_buffer.front().len()
     }
 
     /// Decode a GB Camera saved photo slot to RGBA pixel data.
