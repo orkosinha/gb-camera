@@ -1,8 +1,8 @@
 //! Game Boy Camera (Pocket Camera) sensor emulation and photo decoding.
 
+use super::{Memory, RAM_BANK_SIZE};
 use crate::log::{LogCategory, RateLimiter};
 use crate::{log_info, log_info_limited};
-use super::{Memory, RAM_BANK_SIZE};
 
 impl Memory {
     /// Set camera image data from external source (e.g., webcam).
@@ -70,7 +70,12 @@ impl Memory {
         log_info!(
             LogCategory::Camera,
             "Sensor: exposure={}, gain_bits={}, edge={}, offset={}, neg={}, invert={}",
-            exposure, gain_bits, edge_mode, voltage_offset, output_negative, invert
+            exposure,
+            gain_bits,
+            edge_mode,
+            voltage_offset,
+            output_negative,
+            invert
         );
 
         // Read dithering matrix from A006-A035 (48 bytes)
@@ -86,7 +91,8 @@ impl Memory {
         }
 
         // Check if dither matrix was set (non-zero values)
-        let dither_active = dither_thresholds.iter()
+        let dither_active = dither_thresholds
+            .iter()
             .any(|t| t[0] != 0 || t[1] != 0 || t[2] != 0);
 
         // Log first few dither values for debugging
@@ -95,8 +101,12 @@ impl Memory {
             LogCategory::Camera,
             "Dither active={}, thresholds[0]=[{:02X},{:02X},{:02X}], [8]=[{:02X},{:02X},{:02X}]",
             dither_active,
-            dither_thresholds[0][0], dither_thresholds[0][1], dither_thresholds[0][2],
-            dither_thresholds[8][0], dither_thresholds[8][1], dither_thresholds[8][2]
+            dither_thresholds[0][0],
+            dither_thresholds[0][1],
+            dither_thresholds[0][2],
+            dither_thresholds[8][0],
+            dither_thresholds[8][1],
+            dither_thresholds[8][2]
         );
 
         // Log input image stats
@@ -107,7 +117,10 @@ impl Memory {
         log_info!(
             LogCategory::Camera,
             "Input image: avg={}, min={}, max={}, ready={}",
-            img_avg, img_min, img_max, self.camera_image_ready
+            img_avg,
+            img_min,
+            img_max,
+            self.camera_image_ready
         );
 
         // Calculate brightness multiplier from exposure (default ~0x1000 is "normal")
@@ -120,7 +133,7 @@ impl Memory {
 
         // Calculate contrast multiplier from gain (higher gain = more contrast)
         let gain_factor = match gain_bits {
-            0b00 => 2.0,  // Highest gain
+            0b00 => 2.0, // Highest gain
             0b01 => 1.5,
             0b10 => 1.0,
             0b11 => 0.75, // Lowest gain
@@ -133,7 +146,9 @@ impl Memory {
         log_info!(
             LogCategory::Camera,
             "Effect params: exposure_f={:.2}, gain_f={:.2}, offset_adj={:.1}",
-            exposure_factor, gain_factor, offset_adjustment
+            exposure_factor,
+            gain_factor,
+            offset_adjustment
         );
 
         // Process the image with sensor emulation
@@ -172,10 +187,10 @@ impl Memory {
                     // Simple edge detection kernel (Laplacian-like)
                     let center = processed[idx] as i32;
                     let neighbors = [
-                        processed[idx - WIDTH] as i32,     // top
-                        processed[idx + WIDTH] as i32,     // bottom
-                        processed[idx - 1] as i32,         // left
-                        processed[idx + 1] as i32,         // right
+                        processed[idx - WIDTH] as i32, // top
+                        processed[idx + WIDTH] as i32, // bottom
+                        processed[idx - 1] as i32,     // left
+                        processed[idx + 1] as i32,     // right
                     ];
                     let avg_neighbors: i32 = neighbors.iter().sum::<i32>() / 4;
                     let edge = center - avg_neighbors;
@@ -241,13 +256,18 @@ impl Memory {
         log_info!(
             LogCategory::Camera,
             "Processed: avg={}, min={}, max={}",
-            proc_avg, proc_min, proc_max
+            proc_avg,
+            proc_min,
+            proc_max
         );
 
         log_info!(
             LogCategory::Camera,
             "Quantized: colors [0]={}, [1]={}, [2]={}, [3]={}",
-            color_counts[0], color_counts[1], color_counts[2], color_counts[3]
+            color_counts[0],
+            color_counts[1],
+            color_counts[2],
+            color_counts[3]
         );
 
         // Convert quantized image to tiles in SRAM
@@ -299,9 +319,7 @@ impl Memory {
         // For saved slots (1-30), check the ROM's state vector
         if slot >= 1 && slot <= 30 {
             let state_idx = STATE_VECTOR_OFFSET + (slot - 1) as usize;
-            if state_idx < self.cartridge_ram.len()
-                && self.cartridge_ram[state_idx] == 0xFF
-            {
+            if state_idx < self.cartridge_ram.len() && self.cartridge_ram[state_idx] == 0xFF {
                 return Vec::new();
             }
         }
@@ -311,7 +329,7 @@ impl Memory {
         } else {
             let adjusted = (slot - 1) as usize;
             let bank = adjusted / 2 + 1;
-            let offset_in_bank = (adjusted % 2) * 0x0E00;
+            let offset_in_bank = (adjusted % 2) * 0x1000;
             bank * RAM_BANK_SIZE + offset_in_bank
         };
 
