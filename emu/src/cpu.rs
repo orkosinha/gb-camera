@@ -1,11 +1,19 @@
+//! Sharp LR35902 CPU emulation.
+//!
+//! Implements the full instruction set including CB-prefixed opcodes,
+//! interrupt handling, and the HALT state. Each `step` call executes
+//! one instruction and returns the number of T-cycles consumed.
+
 use std::fmt;
 
 use crate::bus::MemoryBus;
 use crate::interrupts::{Interrupt, InterruptController};
+use crate::memory::io;
 use crate::log::LogCategory;
 use crate::log_info;
 
 /// Debug state for CPU inspection.
+#[allow(dead_code)]
 pub struct CpuDebugState {
     pub pc: u16,
     pub sp: u16,
@@ -96,7 +104,7 @@ impl Cpu {
         // Wake from halt if any interrupt is pending
         if self.halted {
             let ie = bus.get_ie();
-            let if_reg = bus.read_io_direct(0x0F);
+            let if_reg = bus.read_io_direct(io::IF);
             if ie & if_reg & 0x1F != 0 {
                 self.halted = false;
             } else {
@@ -147,7 +155,7 @@ impl Cpu {
         interrupts: &mut InterruptController,
     ) -> Option<u32> {
         let ie = bus.get_ie();
-        let if_reg = bus.read_io_direct(0x0F);
+        let if_reg = bus.read_io_direct(io::IF);
         let pending = ie & if_reg & 0x1F;
 
         if pending == 0 {
@@ -171,7 +179,7 @@ impl Cpu {
         };
 
         // Clear interrupt flag
-        interrupts.clear(interrupt, bus.memory);
+        interrupts.clear(interrupt, bus.memory_mut());
 
         // Push PC and jump to handler
         self.push_word(bus, self.pc);
@@ -1733,6 +1741,7 @@ impl Cpu {
     }
 
     /// Get current CPU state for debugging.
+    #[allow(dead_code)]
     pub fn get_debug_state(&self) -> CpuDebugState {
         CpuDebugState {
             pc: self.pc,

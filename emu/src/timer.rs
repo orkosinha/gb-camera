@@ -1,3 +1,9 @@
+//! Game Boy timer emulation (DIV, TIMA, TMA, TAC registers).
+//!
+//! The timer increments TIMA at a configurable frequency (4096–262144 Hz)
+//! controlled by TAC. When TIMA overflows, it reloads from TMA and
+//! requests a Timer interrupt. DIV increments at a fixed 16384 Hz rate.
+
 use crate::interrupts::{Interrupt, InterruptController};
 use crate::memory::Memory;
 

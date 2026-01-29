@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Log categories for filtering and rate limiting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum LogCategory {
     Camera,
     Memory,
@@ -15,6 +16,7 @@ pub enum LogCategory {
 }
 
 impl LogCategory {
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn prefix(self) -> &'static str {
         match self {
             LogCategory::Camera => "[Camera]",
@@ -27,11 +29,13 @@ impl LogCategory {
 }
 
 /// Rate limiter that tracks how many times a particular log point has been hit.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub struct RateLimiter {
     counter: AtomicU32,
     limit: u32,
 }
 
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 impl RateLimiter {
     /// Create a new rate limiter that allows `limit` messages.
     pub const fn new(limit: u32) -> Self {
@@ -107,6 +111,7 @@ impl Logger {
     pub fn info(_category: LogCategory, _msg: &str) {}
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)]
     pub fn warn(_category: LogCategory, _msg: &str) {}
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -117,6 +122,7 @@ impl Logger {
     pub fn info_limited(_category: LogCategory, _limiter: &RateLimiter, _msg: &str) {}
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)]
     pub fn info_interval(
         _category: LogCategory,
         _limiter: &RateLimiter,

@@ -1,9 +1,17 @@
+//! Pixel Processing Unit (PPU) emulation.
+//!
+//! Renders the 160x144 display by cycling through four modes per scanline:
+//! OAM scan, pixel drawing, H-blank, and V-blank. Supports background tiles,
+//! window overlay, and up to 10 sprites per scanline with priority sorting.
+
 use std::fmt;
 
 use crate::interrupts::{Interrupt, InterruptController};
+use crate::memory::io;
 use crate::memory::Memory;
 
 /// Debug state for PPU inspection.
+#[allow(dead_code)]
 pub struct PpuDebugState {
     pub mode: u8,
     pub mode_name: &'static str,
@@ -23,6 +31,7 @@ impl fmt::Display for PpuDebugState {
 }
 
 impl PpuMode {
+    #[allow(dead_code)]
     fn name(self) -> &'static str {
         match self {
             PpuMode::HBlank => "HBLANK",
@@ -74,14 +83,14 @@ impl Ppu {
     }
 
     pub fn tick(&mut self, cycles: u32, memory: &mut Memory, interrupts: &InterruptController) {
-        let lcdc = memory.read_io_direct(0x40);
+        let lcdc = memory.read_io_direct(io::LCDC);
 
         // LCD disabled - keep the last frame visible (don't clear buffer)
         if lcdc & 0x80 == 0 {
             self.mode = PpuMode::HBlank;
             self.cycles = 0;
             self.line = 0;
-            memory.write_io_direct(0x44, 0); // LY = 0
+            memory.write_io_direct(io::LY, 0); // LY = 0
             // Note: We don't clear the buffer here, so last frame stays visible
             return;
         }
@@ -104,7 +113,7 @@ impl Ppu {
                     self.render_scanline(memory);
 
                     // STAT interrupt for HBLANK
-                    let stat = memory.read_io_direct(0x41);
+                    let stat = memory.read_io_direct(io::STAT);
                     if stat & 0x08 != 0 {
                         interrupts.request(Interrupt::LcdStat, memory);
                     }
@@ -114,7 +123,7 @@ impl Ppu {
                 if self.cycles >= HBLANK_CYCLES {
                     self.cycles -= HBLANK_CYCLES;
                     self.line += 1;
-                    memory.write_io_direct(0x44, self.line);
+                    memory.write_io_direct(io::LY, self.line);
 
                     // Check LYC coincidence
                     self.check_lyc_coincidence(memory, interrupts);
@@ -125,7 +134,7 @@ impl Ppu {
                         interrupts.request(Interrupt::VBlank, memory);
 
                         // STAT interrupt for VBLANK
-                        let stat = memory.read_io_direct(0x41);
+                        let stat = memory.read_io_direct(io::STAT);
                         if stat & 0x10 != 0 {
                             interrupts.request(Interrupt::LcdStat, memory);
                         }
@@ -133,7 +142,7 @@ impl Ppu {
                         self.mode = PpuMode::OamScan;
 
                         // STAT interrupt for OAM
-                        let stat = memory.read_io_direct(0x41);
+                        let stat = memory.read_io_direct(io::STAT);
                         if stat & 0x20 != 0 {
                             interrupts.request(Interrupt::LcdStat, memory);
                         }
@@ -150,27 +159,27 @@ impl Ppu {
                         self.mode = PpuMode::OamScan;
 
                         // STAT interrupt for OAM
-                        let stat = memory.read_io_direct(0x41);
+                        let stat = memory.read_io_direct(io::STAT);
                         if stat & 0x20 != 0 {
                             interrupts.request(Interrupt::LcdStat, memory);
                         }
                     }
 
-                    memory.write_io_direct(0x44, self.line);
+                    memory.write_io_direct(io::LY, self.line);
                     self.check_lyc_coincidence(memory, interrupts);
                 }
             }
         }
 
         // Update STAT register mode bits
-        let mut stat = memory.read_io_direct(0x41);
+        let mut stat = memory.read_io_direct(io::STAT);
         stat = (stat & 0xFC) | self.mode as u8;
-        memory.write_io_direct(0x41, stat);
+        memory.write_io_direct(io::STAT, stat);
     }
 
     fn check_lyc_coincidence(&self, memory: &mut Memory, interrupts: &InterruptController) {
-        let lyc = memory.read_io_direct(0x45);
-        let mut stat = memory.read_io_direct(0x41);
+        let lyc = memory.read_io_direct(io::LYC);
+        let mut stat = memory.read_io_direct(io::STAT);
 
         if self.line == lyc {
             stat |= 0x04; // Set coincidence flag
@@ -181,11 +190,11 @@ impl Ppu {
             stat &= !0x04; // Clear coincidence flag
         }
 
-        memory.write_io_direct(0x41, stat);
+        memory.write_io_direct(io::STAT, stat);
     }
 
     fn render_scanline(&mut self, memory: &Memory) {
-        let lcdc = memory.read_io_direct(0x40);
+        let lcdc = memory.read_io_direct(io::LCDC);
         let line = self.line as usize;
 
         if line >= SCREEN_HEIGHT {
@@ -213,10 +222,10 @@ impl Ppu {
     }
 
     fn render_background(&mut self, memory: &Memory, line: usize) {
-        let lcdc = memory.read_io_direct(0x40);
-        let scy = memory.read_io_direct(0x42) as usize;
-        let scx = memory.read_io_direct(0x43) as usize;
-        let bgp = memory.read_io_direct(0x47);
+        let lcdc = memory.read_io_direct(io::LCDC);
+        let scy = memory.read_io_direct(io::SCY) as usize;
+        let scx = memory.read_io_direct(io::SCX) as usize;
+        let bgp = memory.read_io_direct(io::BGP);
 
         let tile_data_base: u16 = if lcdc & 0x10 != 0 { 0x8000 } else { 0x8800 };
         let tile_map_base: u16 = if lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
@@ -252,10 +261,10 @@ impl Ppu {
     }
 
     fn render_window(&mut self, memory: &Memory, line: usize) {
-        let lcdc = memory.read_io_direct(0x40);
-        let wy = memory.read_io_direct(0x4A) as usize;
-        let wx = memory.read_io_direct(0x4B) as i16 - 7;
-        let bgp = memory.read_io_direct(0x47);
+        let lcdc = memory.read_io_direct(io::LCDC);
+        let wy = memory.read_io_direct(io::WY) as usize;
+        let wx = memory.read_io_direct(io::WX) as i16 - 7;
+        let bgp = memory.read_io_direct(io::BGP);
 
         if line < wy || wx >= SCREEN_WIDTH as i16 {
             return;
@@ -298,13 +307,13 @@ impl Ppu {
     }
 
     fn render_sprites(&mut self, memory: &Memory, line: usize) {
-        let lcdc = memory.read_io_direct(0x40);
+        let lcdc = memory.read_io_direct(io::LCDC);
         let sprite_height: i16 = if lcdc & 0x04 != 0 { 16 } else { 8 };
         let oam = memory.get_oam();
 
         // Cache palette registers outside the sprite loop
-        let obp0 = memory.read_io_direct(0x48);
-        let obp1 = memory.read_io_direct(0x49);
+        let obp0 = memory.read_io_direct(io::OBP0);
+        let obp1 = memory.read_io_direct(io::OBP1);
 
         // Collect sprites on this line (max 10, stack-allocated)
         let mut sprites: [(u8, i16, u8, u8); 10] = [(0, 0, 0, 0); 10];
@@ -387,6 +396,7 @@ impl Ppu {
     }
 
     /// Get current PPU state for debugging.
+    #[allow(dead_code)]
     pub fn get_debug_state(&self) -> PpuDebugState {
         PpuDebugState {
             mode: self.mode as u8,
@@ -398,6 +408,7 @@ impl Ppu {
     }
 
     /// Count non-zero pixels in the buffer.
+    #[allow(dead_code)]
     pub fn count_non_zero_pixels(&self) -> usize {
         self.buffer.iter().filter(|&&p| p != 0).count()
     }

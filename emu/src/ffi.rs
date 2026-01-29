@@ -1,147 +1,18 @@
 //! C-compatible FFI layer for iOS integration.
 //!
 //! This module provides extern "C" functions that can be called from Swift
-//! via a bridging header, similar to JNI for Java.
+//! via a bridging header. All emulation logic lives in [`GameBoyCore`]; this
+//! module is a thin adapter between C calling conventions and the core.
 
 use std::ffi::c_void;
 use std::ptr;
 use std::slice;
 
-use crate::bus::MemoryBus;
-use crate::cpu::Cpu;
-use crate::interrupts::{Interrupt, InterruptController};
-use crate::joypad::Joypad;
-use crate::memory::Memory;
-use crate::ppu::Ppu;
-use crate::timer::Timer;
-
-const CYCLES_PER_FRAME: u32 = 70224;
+use crate::core::GameBoyCore;
 
 /// Opaque GameBoy emulator handle for FFI.
-pub struct GameBoyHandle {
-    cpu: Cpu,
-    memory: Memory,
-    ppu: Ppu,
-    timer: Timer,
-    interrupts: InterruptController,
-    joypad: Joypad,
-    frame_buffer: Box<[u8; 160 * 144 * 4]>,
-    camera_live_buffer: Box<[u8; 128 * 112 * 4]>,
-    frame_count: u32,
-    total_cycles: u64,
-    instruction_count: u64,
-}
-
-impl GameBoyHandle {
-    fn new() -> Self {
-        GameBoyHandle {
-            cpu: Cpu::new(),
-            memory: Memory::new(),
-            ppu: Ppu::new(),
-            timer: Timer::new(),
-            interrupts: InterruptController::new(),
-            joypad: Joypad::new(),
-            frame_buffer: Box::new([0; 160 * 144 * 4]),
-            camera_live_buffer: Box::new([0; 128 * 112 * 4]),
-            frame_count: 0,
-            total_cycles: 0,
-            instruction_count: 0,
-        }
-    }
-
-    fn load_rom(&mut self, data: &[u8]) -> bool {
-        self.memory.load_rom(data).is_ok()
-    }
-
-    fn step_frame(&mut self) {
-        let mut cycles_elapsed: u32 = 0;
-
-        while cycles_elapsed < CYCLES_PER_FRAME {
-            let cycles = {
-                let mut bus = MemoryBus::new(&mut self.memory, &mut self.timer, &mut self.joypad);
-                self.cpu.step(&mut bus, &mut self.interrupts)
-            };
-
-            self.timer.tick(cycles, &mut self.memory, &self.interrupts);
-            self.ppu.tick(cycles, &mut self.memory, &self.interrupts);
-
-            cycles_elapsed += cycles;
-            self.instruction_count += 1;
-        }
-
-        self.total_cycles += cycles_elapsed as u64;
-        self.frame_count += 1;
-        self.render_frame();
-    }
-
-    fn render_frame(&mut self) {
-        let ppu_buffer = self.ppu.get_buffer();
-        let palette = [0xFFu8, 0xAA, 0x55, 0x00];
-
-        for (i, &pixel) in ppu_buffer.iter().enumerate() {
-            let gray = palette[(pixel & 0x03) as usize];
-            let offset = i * 4;
-            self.frame_buffer[offset] = gray;     // R
-            self.frame_buffer[offset + 1] = gray; // G
-            self.frame_buffer[offset + 2] = gray; // B
-            self.frame_buffer[offset + 3] = 255;  // A
-        }
-    }
-
-    fn set_button(&mut self, button: u8, pressed: bool) {
-        if let Some(btn) = crate::joypad::Button::from_u8(button) {
-            self.joypad.set_button(btn, pressed);
-            if pressed {
-                self.interrupts.request(Interrupt::Joypad, &mut self.memory);
-            }
-        }
-    }
-
-    fn set_camera_image(&mut self, data: &[u8]) {
-        self.memory.set_camera_image(data);
-    }
-
-    fn is_camera_cartridge(&self) -> bool {
-        matches!(self.memory.get_mbc_type(), crate::memory::MbcType::PocketCamera)
-    }
-
-    fn is_camera_ready(&self) -> bool {
-        self.memory.is_camera_image_ready()
-    }
-
-    fn update_camera_live(&mut self) -> bool {
-        if !self.memory.is_camera_capture_dirty() {
-            return false;
-        }
-        self.memory.clear_camera_capture_dirty();
-
-        let sram = self.memory.camera_capture_sram();
-        let palette: [u8; 4] = [0xFF, 0xAA, 0x55, 0x00];
-        let buf = &mut *self.camera_live_buffer;
-
-        for tile_y in 0..14 {
-            for tile_x in 0..16 {
-                let tile_offset = (tile_y * 16 + tile_x) * 16;
-                for row in 0..8 {
-                    let low = sram[tile_offset + row * 2];
-                    let high = sram[tile_offset + row * 2 + 1];
-                    for col in 0..8 {
-                        let bit = 7 - col;
-                        let color_idx = ((high >> bit) & 1) << 1 | ((low >> bit) & 1);
-                        let gray = palette[color_idx as usize];
-                        let px = tile_x * 8 + col;
-                        let py = tile_y * 8 + row;
-                        let i = (py * 128 + px) * 4;
-                        buf[i] = gray;
-                        buf[i + 1] = gray;
-                        buf[i + 2] = gray;
-                        buf[i + 3] = 255;
-                    }
-                }
-            }
-        }
-        true
-    }
+struct GameBoyHandle {
+    core: GameBoyCore,
 }
 
 // ============================================================================
@@ -152,7 +23,9 @@ impl GameBoyHandle {
 /// Returns an opaque pointer that must be freed with `gb_destroy`.
 #[unsafe(no_mangle)]
 pub extern "C" fn gb_create() -> *mut c_void {
-    let handle = Box::new(GameBoyHandle::new());
+    let handle = Box::new(GameBoyHandle {
+        core: GameBoyCore::new(),
+    });
     Box::into_raw(handle) as *mut c_void
 }
 
@@ -178,7 +51,7 @@ pub extern "C" fn gb_load_rom(handle: *mut c_void, data: *const u8, len: usize) 
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
         let rom_data = slice::from_raw_parts(data, len);
-        gb.load_rom(rom_data)
+        gb.core.load_rom(rom_data).is_ok()
     }
 }
 
@@ -191,7 +64,7 @@ pub extern "C" fn gb_step_frame(handle: *mut c_void) {
 
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
-        gb.step_frame();
+        gb.core.step_frame();
     }
 }
 
@@ -206,7 +79,7 @@ pub extern "C" fn gb_get_frame_buffer(handle: *const c_void) -> *const u8 {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.frame_buffer.as_ptr()
+        gb.core.frame_buffer.as_ptr()
     }
 }
 
@@ -238,7 +111,7 @@ pub extern "C" fn gb_set_button(handle: *mut c_void, button: u8, pressed: bool) 
 
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
-        gb.set_button(button, pressed);
+        gb.core.set_button(button, pressed);
     }
 }
 
@@ -250,7 +123,6 @@ pub extern "C" fn gb_set_camera_image(handle: *mut c_void, data: *const u8, len:
         return;
     }
 
-    // Expected size: 128 * 112 = 14336 bytes
     let expected_len = 128 * 112;
     if len < expected_len {
         return;
@@ -259,7 +131,7 @@ pub extern "C" fn gb_set_camera_image(handle: *mut c_void, data: *const u8, len:
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
         let image_data = slice::from_raw_parts(data, expected_len);
-        gb.set_camera_image(image_data);
+        gb.core.set_camera_image(image_data);
     }
 }
 
@@ -272,7 +144,7 @@ pub extern "C" fn gb_is_camera_cartridge(handle: *const c_void) -> bool {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.is_camera_cartridge()
+        gb.core.is_camera_cartridge()
     }
 }
 
@@ -285,7 +157,7 @@ pub extern "C" fn gb_is_camera_ready(handle: *const c_void) -> bool {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.is_camera_ready()
+        gb.core.is_camera_ready()
     }
 }
 
@@ -299,7 +171,7 @@ pub extern "C" fn gb_update_camera_live(handle: *mut c_void) -> bool {
 
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
-        gb.update_camera_live()
+        gb.core.update_camera_live()
     }
 }
 
@@ -314,7 +186,7 @@ pub extern "C" fn gb_camera_live_ptr(handle: *const c_void) -> *const u8 {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.camera_live_buffer.as_ptr()
+        gb.core.camera_live_buffer.as_ptr()
     }
 }
 
@@ -340,7 +212,7 @@ pub extern "C" fn gb_decode_camera_photo(
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        let rgba = gb.memory.decode_camera_photo(slot);
+        let rgba = gb.core.decode_camera_photo(slot);
         if rgba.is_empty() {
             return 0;
         }
@@ -362,7 +234,7 @@ pub extern "C" fn gb_get_frame_count(handle: *const c_void) -> u32 {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.frame_count
+        gb.core.frame_count
     }
 }
 
@@ -375,21 +247,25 @@ pub extern "C" fn gb_get_save_size(handle: *const c_void) -> usize {
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        gb.memory.get_cartridge_ram().len()
+        gb.core.memory.get_cartridge_ram().len()
     }
 }
 
 /// Copy cartridge RAM (save data) to the provided buffer.
 /// Returns the number of bytes copied, or 0 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn gb_get_save_data(handle: *const c_void, buffer: *mut u8, buffer_len: usize) -> usize {
+pub extern "C" fn gb_get_save_data(
+    handle: *const c_void,
+    buffer: *mut u8,
+    buffer_len: usize,
+) -> usize {
     if handle.is_null() || buffer.is_null() {
         return 0;
     }
 
     unsafe {
         let gb = &*(handle as *const GameBoyHandle);
-        let ram = gb.memory.get_cartridge_ram();
+        let ram = gb.core.memory.get_cartridge_ram();
         let copy_len = ram.len().min(buffer_len);
 
         if copy_len > 0 {
@@ -411,7 +287,7 @@ pub extern "C" fn gb_load_save_data(handle: *mut c_void, data: *const u8, len: u
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
         let save_data = slice::from_raw_parts(data, len);
-        gb.memory.load_cartridge_ram(save_data);
+        gb.core.memory.load_cartridge_ram(save_data);
         true
     }
 }

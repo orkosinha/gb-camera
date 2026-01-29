@@ -1,4 +1,10 @@
-use crate::memory::Memory;
+//! Interrupt controller for the Game Boy's five interrupt sources.
+//!
+//! Interrupts are requested by writing to the IF register (0xFF0F) and
+//! enabled via the IE register (0xFFFF). Priority order (highest first):
+//! VBlank, LCD STAT, Timer, Serial, Joypad.
+
+use crate::memory::{io, Memory};
 
 /// Game Boy interrupt types, ordered by hardware priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,15 +30,15 @@ impl InterruptController {
     /// Set the interrupt flag bit for the given interrupt type.
     #[inline]
     pub fn request(&self, interrupt: Interrupt, memory: &mut Memory) {
-        let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg | (1 << interrupt as u8));
+        let if_reg = memory.read_io_direct(io::IF);
+        memory.write_io_direct(io::IF, if_reg | (1 << interrupt as u8));
     }
 
     /// Clear the interrupt flag bit for the given interrupt type.
     #[inline]
     pub fn clear(&self, interrupt: Interrupt, memory: &mut Memory) {
-        let if_reg = memory.read_io_direct(0x0F);
-        memory.write_io_direct(0x0F, if_reg & !(1 << interrupt as u8));
+        let if_reg = memory.read_io_direct(io::IF);
+        memory.write_io_direct(io::IF, if_reg & !(1 << interrupt as u8));
     }
 }
 
@@ -44,34 +50,34 @@ mod tests {
     fn test_interrupt_requests() {
         let ic = InterruptController::new();
         let mut mem = Memory::new();
-        mem.write_io_direct(0x0F, 0x00);
+        mem.write_io_direct(io::IF, 0x00);
 
         ic.request(Interrupt::VBlank, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F) & 0x01, 0x01);
+        assert_eq!(mem.read_io_direct(io::IF) & 0x01, 0x01);
 
         ic.request(Interrupt::LcdStat, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F) & 0x02, 0x02);
+        assert_eq!(mem.read_io_direct(io::IF) & 0x02, 0x02);
 
         ic.request(Interrupt::Timer, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F) & 0x04, 0x04);
+        assert_eq!(mem.read_io_direct(io::IF) & 0x04, 0x04);
 
         ic.request(Interrupt::Serial, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F) & 0x08, 0x08);
+        assert_eq!(mem.read_io_direct(io::IF) & 0x08, 0x08);
 
         ic.request(Interrupt::Joypad, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F) & 0x10, 0x10);
+        assert_eq!(mem.read_io_direct(io::IF) & 0x10, 0x10);
     }
 
     #[test]
     fn test_interrupt_clear() {
         let ic = InterruptController::new();
         let mut mem = Memory::new();
-        mem.write_io_direct(0x0F, 0x1F); // All interrupts set
+        mem.write_io_direct(io::IF, 0x1F); // All interrupts set
 
         ic.clear(Interrupt::VBlank, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F), 0x1E);
+        assert_eq!(mem.read_io_direct(io::IF), 0x1E);
 
         ic.clear(Interrupt::Timer, &mut mem);
-        assert_eq!(mem.read_io_direct(0x0F), 0x1A);
+        assert_eq!(mem.read_io_direct(io::IF), 0x1A);
     }
 }

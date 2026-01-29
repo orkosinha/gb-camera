@@ -1,13 +1,20 @@
+//! Game Boy joypad (controller) emulation.
+//!
+//! The joypad register at 0xFF00 uses a multiplexed design: the game writes
+//! bits 4-5 to select either action buttons (A/B/Select/Start) or direction
+//! buttons (Up/Down/Left/Right), then reads bits 0-3 to get the state.
+//! All button signals are active-low (0 = pressed).
+
 pub struct Joypad {
     // Button states (active low in hardware, but we track as true = pressed)
-    pub a: bool,
-    pub b: bool,
-    pub select: bool,
-    pub start: bool,
-    pub right: bool,
-    pub left: bool,
-    pub up: bool,
-    pub down: bool,
+    a: bool,
+    b: bool,
+    select: bool,
+    start: bool,
+    right: bool,
+    left: bool,
+    up: bool,
+    down: bool,
 
     // Selection register (0xFF00 bits 4-5)
     select_buttons: bool,
@@ -141,8 +148,7 @@ mod tests {
     #[test]
     fn test_no_buttons_pressed() {
         let mut joypad = Joypad::new();
-        joypad.select_buttons = true;
-        joypad.select_dpad = false;
+        joypad.write(0x10); // Select action buttons (bit 5 low)
 
         // No buttons pressed, lower nibble should be 0xF (all high)
         let result = joypad.read();
@@ -152,9 +158,8 @@ mod tests {
     #[test]
     fn test_a_button_pressed() {
         let mut joypad = Joypad::new();
-        joypad.select_buttons = true;
-        joypad.select_dpad = false;
-        joypad.a = true;
+        joypad.write(0x10); // Select action buttons (bit 5 low)
+        joypad.set_button(Button::A, true);
 
         let result = joypad.read();
         assert_eq!(result & 0x01, 0x00); // A is bit 0, should be low
@@ -163,10 +168,9 @@ mod tests {
     #[test]
     fn test_dpad_pressed() {
         let mut joypad = Joypad::new();
-        joypad.select_buttons = false;
-        joypad.select_dpad = true;
-        joypad.up = true;
-        joypad.right = true;
+        joypad.write(0x20); // Select d-pad (bit 4 low)
+        joypad.set_button(Button::Up, true);
+        joypad.set_button(Button::Right, true);
 
         let result = joypad.read();
         assert_eq!(result & 0x01, 0x00); // Right

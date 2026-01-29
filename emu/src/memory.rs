@@ -1,3 +1,10 @@
+//! Game Boy memory subsystem and cartridge (MBC) emulation.
+//!
+//! Implements the full 64KB address space including ROM banking (MBC1/MBC3/MBC5),
+//! external RAM, VRAM, Work RAM, OAM, and I/O registers. Also handles
+//! Game Boy Camera (Pocket Camera) cartridge-specific features including
+//! sensor emulation and photo decoding.
+
 use std::fmt;
 
 use crate::log::{LogCategory, RateLimiter};
@@ -6,7 +13,24 @@ use crate::{log_info, log_info_limited};
 const ROM_BANK_SIZE: usize = 0x4000; // 16KB
 const RAM_BANK_SIZE: usize = 0x2000; // 8KB
 
+/// Named constants for Game Boy I/O register offsets (relative to 0xFF00).
+pub(crate) mod io {
+    pub const IF: u8 = 0x0F;
+    pub const LCDC: u8 = 0x40;
+    pub const STAT: u8 = 0x41;
+    pub const SCY: u8 = 0x42;
+    pub const SCX: u8 = 0x43;
+    pub const LY: u8 = 0x44;
+    pub const LYC: u8 = 0x45;
+    pub const BGP: u8 = 0x47;
+    pub const OBP0: u8 = 0x48;
+    pub const OBP1: u8 = 0x49;
+    pub const WY: u8 = 0x4A;
+    pub const WX: u8 = 0x4B;
+}
+
 /// Debug state for Memory inspection.
+#[allow(dead_code)]
 pub struct MemoryDebugState {
     pub rom_bank: u16,
     pub ram_bank: u8,
@@ -25,6 +49,7 @@ impl fmt::Display for MemoryDebugState {
 }
 
 /// I/O register state for debugging.
+#[allow(dead_code)]
 pub struct IoState {
     pub lcdc: u8,
     pub stat: u8,
@@ -534,19 +559,13 @@ impl Memory {
         self.ie
     }
 
-    /// Get VRAM contents for debugging/tile viewer.
-    #[allow(dead_code)]
-    pub fn get_vram(&self) -> &[u8] {
-        &self.vram
-    }
-
     #[inline]
     pub fn get_oam(&self) -> &[u8] {
         &self.oam
     }
 
-    pub fn get_cartridge_ram(&self) -> Vec<u8> {
-        self.cartridge_ram.clone()
+    pub fn get_cartridge_ram(&self) -> &[u8] {
+        &self.cartridge_ram
     }
 
     pub fn load_cartridge_ram(&mut self, data: &[u8]) {
@@ -554,18 +573,14 @@ impl Memory {
         self.cartridge_ram[..len].copy_from_slice(&data[..len]);
     }
 
-    /// Get serial output buffer (for test ROM debugging).
-    #[allow(dead_code)]
-    pub fn get_serial_output(&self) -> &[u8] {
-        &self.serial_output
-    }
-
     /// Get serial output as a string (for test ROM debugging).
+    #[allow(dead_code)]
     pub fn get_serial_output_string(&self) -> String {
         String::from_utf8_lossy(&self.serial_output).to_string()
     }
 
     /// Clear the serial output buffer.
+    #[allow(dead_code)]
     pub fn clear_serial_output(&mut self) {
         self.serial_output.clear();
     }
@@ -576,6 +591,7 @@ impl Memory {
     }
 
     /// Get the number of ROM banks.
+    #[allow(dead_code)]
     pub fn get_rom_bank_count(&self) -> usize {
         self.rom.len() / ROM_BANK_SIZE
     }
@@ -950,6 +966,7 @@ impl Memory {
     }
 
     /// Get current memory state for debugging.
+    #[allow(dead_code)]
     pub fn get_debug_state(&self) -> MemoryDebugState {
         MemoryDebugState {
             rom_bank: self.rom_bank,
@@ -960,6 +977,7 @@ impl Memory {
     }
 
     /// Get current I/O register state for debugging.
+    #[allow(dead_code)]
     pub fn get_io_state(&self) -> IoState {
         IoState {
             lcdc: self.io[0x40],
@@ -974,6 +992,7 @@ impl Memory {
     }
 
     /// Check if LCD is enabled.
+    #[allow(dead_code)]
     pub fn is_lcd_enabled(&self) -> bool {
         self.io[0x40] & 0x80 != 0
     }
