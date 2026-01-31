@@ -17,6 +17,11 @@ const RAM_BANK_SIZE: usize = 0x2000; // 8KB
 
 /// Named constants for Game Boy I/O register offsets (relative to 0xFF00).
 pub(crate) mod io {
+    pub const JOYP: u8 = 0x00;
+    pub const DIV: u8 = 0x04;
+    pub const TIMA: u8 = 0x05;
+    pub const TMA: u8 = 0x06;
+    pub const TAC: u8 = 0x07;
     pub const IF: u8 = 0x0F;
     pub const LCDC: u8 = 0x40;
     pub const STAT: u8 = 0x41;

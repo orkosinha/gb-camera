@@ -106,6 +106,29 @@ impl GameBoyCore {
         instructions_this_frame
     }
 
+    /// Execute a single CPU instruction, ticking timer and PPU.
+    /// If a frame boundary is crossed (VBlank entry), renders the frame.
+    /// Returns the number of T-cycles consumed.
+    pub(crate) fn step_single(&mut self) -> u32 {
+        let cycles = {
+            let mut bus = MemoryBus::new(&mut self.memory, &mut self.timer, &mut self.joypad);
+            self.cpu.step(&mut bus, &mut self.interrupts)
+        };
+
+        self.timer.tick(cycles, &mut self.memory, &self.interrupts);
+        self.ppu.tick(cycles, &mut self.memory, &self.interrupts);
+
+        self.total_cycles += cycles as u64;
+        self.instruction_count += 1;
+
+        if self.ppu.frame_ready() {
+            self.frame_count += 1;
+            self.render_frame();
+        }
+
+        cycles
+    }
+
     fn render_frame(&mut self) {
         let ppu_buffer = self.ppu.get_buffer();
         let palette = [0xFFu8, 0xAA, 0x55, 0x00];

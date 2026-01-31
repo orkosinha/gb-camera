@@ -27,12 +27,6 @@ depends = ["build:web"]
 dir = "web/dist"
 run = "npx serve ."
 
-[tasks.open]
-description = "Build and open the web project in the browser"
-depends = ["build:web"]
-dir = "web/dist"
-run = "npx serve . --open"
-
 # =============================================================================
 # iOS Build Tasks
 # =============================================================================

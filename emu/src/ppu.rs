@@ -69,6 +69,7 @@ pub struct Ppu {
     cycles: u32,
     line: u8,
     window_line_counter: u8,
+    pub(crate) frame_ready: bool,
 }
 
 impl Ppu {
@@ -79,6 +80,7 @@ impl Ppu {
             cycles: 0,
             line: 0,
             window_line_counter: 0,
+            frame_ready: false,
         }
     }
 
@@ -131,6 +133,7 @@ impl Ppu {
                     if self.line >= SCREEN_HEIGHT as u8 {
                         self.mode = PpuMode::VBlank;
                         self.window_line_counter = 0;
+                        self.frame_ready = true;
                         interrupts.request(Interrupt::VBlank, memory);
 
                         // STAT interrupt for VBLANK
@@ -388,6 +391,12 @@ impl Ppu {
                 self.buffer[buffer_idx] = (palette >> (color_idx * 2)) & 0x03;
             }
         }
+    }
+
+    pub fn frame_ready(&mut self) -> bool {
+        let r = self.frame_ready;
+        self.frame_ready = false;
+        r
     }
 
     pub fn get_buffer(&self) -> &[u8] {

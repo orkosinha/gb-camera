@@ -249,6 +249,158 @@ impl GameBoy {
     }
 }
 
+// ── Debug methods ──────────────────────────────────────────────────
+
+#[wasm_bindgen]
+impl GameBoy {
+    // Execution control
+
+    /// Execute a single CPU instruction, return cycles consumed.
+    pub fn step_instruction(&mut self) -> u32 {
+        self.core.step_single()
+    }
+
+    // CPU state
+
+    pub fn cpu_pc(&self) -> u16 {
+        self.core.cpu.get_debug_state().pc
+    }
+
+    pub fn cpu_sp(&self) -> u16 {
+        self.core.cpu.get_debug_state().sp
+    }
+
+    pub fn cpu_a(&self) -> u8 {
+        self.core.cpu.get_debug_state().a
+    }
+
+    pub fn cpu_f(&self) -> u8 {
+        self.core.cpu.get_debug_state().f
+    }
+
+    pub fn cpu_bc(&self) -> u16 {
+        self.core.cpu.get_debug_state().bc
+    }
+
+    pub fn cpu_de(&self) -> u16 {
+        self.core.cpu.get_debug_state().de
+    }
+
+    pub fn cpu_hl(&self) -> u16 {
+        self.core.cpu.get_debug_state().hl
+    }
+
+    pub fn cpu_ime(&self) -> bool {
+        self.core.cpu.get_debug_state().ime
+    }
+
+    pub fn cpu_halted(&self) -> bool {
+        self.core.cpu.get_debug_state().halted
+    }
+
+    // PPU state
+
+    pub fn ppu_mode(&self) -> u8 {
+        self.core.ppu.get_debug_state().mode
+    }
+
+    pub fn ppu_line(&self) -> u8 {
+        self.core.ppu.get_debug_state().line
+    }
+
+    pub fn ppu_cycles(&self) -> u32 {
+        self.core.ppu.get_debug_state().cycles
+    }
+
+    // Memory access
+
+    pub fn read_byte(&self, addr: u16) -> u8 {
+        self.core.memory.read(addr)
+    }
+
+    pub fn read_range(&self, addr: u16, len: u16) -> Vec<u8> {
+        let mut data = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            data.push(self.core.memory.read(addr.wrapping_add(i)));
+        }
+        data
+    }
+
+    // IO registers
+
+    pub fn io_lcdc(&self) -> u8 {
+        self.core.memory.read_io_direct(io::LCDC)
+    }
+
+    pub fn io_stat(&self) -> u8 {
+        self.core.memory.read_io_direct(io::STAT)
+    }
+
+    pub fn io_scy(&self) -> u8 {
+        self.core.memory.read_io_direct(io::SCY)
+    }
+
+    pub fn io_scx(&self) -> u8 {
+        self.core.memory.read_io_direct(io::SCX)
+    }
+
+    pub fn io_ly(&self) -> u8 {
+        self.core.memory.read_io_direct(io::LY)
+    }
+
+    pub fn io_lyc(&self) -> u8 {
+        self.core.memory.read_io_direct(io::LYC)
+    }
+
+    pub fn io_bgp(&self) -> u8 {
+        self.core.memory.read_io_direct(io::BGP)
+    }
+
+    pub fn io_obp0(&self) -> u8 {
+        self.core.memory.read_io_direct(io::OBP0)
+    }
+
+    pub fn io_obp1(&self) -> u8 {
+        self.core.memory.read_io_direct(io::OBP1)
+    }
+
+    pub fn io_wy(&self) -> u8 {
+        self.core.memory.read_io_direct(io::WY)
+    }
+
+    pub fn io_wx(&self) -> u8 {
+        self.core.memory.read_io_direct(io::WX)
+    }
+
+    pub fn io_ie(&self) -> u8 {
+        self.core.memory.read(0xFFFF)
+    }
+
+    pub fn io_if(&self) -> u8 {
+        self.core.memory.read_io_direct(io::IF)
+    }
+
+    pub fn io_div(&self) -> u8 {
+        self.core.memory.read_io_direct(io::DIV)
+    }
+
+    pub fn io_tima(&self) -> u8 {
+        self.core.memory.read_io_direct(io::TIMA)
+    }
+
+    pub fn io_tma(&self) -> u8 {
+        self.core.memory.read_io_direct(io::TMA)
+    }
+
+    pub fn io_tac(&self) -> u8 {
+        self.core.memory.read_io_direct(io::TAC)
+    }
+
+    pub fn io_joypad(&self) -> u8 {
+        self.core.memory.read_io_direct(io::JOYP)
+    }
+}
+
 impl Default for GameBoy {
     fn default() -> Self {
         Self::new()
