@@ -1,58 +1,753 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>gb-photo</title>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Game Boy Debug</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
 
-    <style>
-        /* Hide native file input */
-        input[type="file"] {
-            display: none;
-        }
+            :root {
+                /* Viewport-scaled font sizes — panels fill at any resolution */
+                --fs-pre: clamp(11px, 1.1vw, 16px);
+                --fs-title: clamp(10px, 0.9vw, 14px);
+                --fs-btn: clamp(11px, 1vw, 15px);
+                --fs-small: clamp(10px, 0.85vw, 13px);
+                --gap: clamp(3px, 0.35vw, 5px);
+            }
 
-        /* Button-style label */
-        .button {
-            display: inline-block;
-            padding: 8px 14px;
-            border: 1px solid #000;
-            cursor: pointer;
-            font-family: sans-serif;
-            font-size: 14px;
-        }
+            html,
+            body {
+                height: 100%;
+                overflow: hidden;
+                background: #111;
+                color: #ddd;
+                font-family: "Courier New", Courier, monospace;
+                font-size: var(--fs-pre);
+            }
 
-        .button:hover {
-            background: #eee;
-        }
-    </style>
-</head>
-<body>
+            body {
+                display: flex;
+                flex-direction: column;
+                padding: var(--gap);
+                gap: var(--gap);
+            }
 
-    <h1>Emulator</h1>
+            /* ── Top bar ──────────────────────────────────────────────────────── */
 
-    <canvas id="screen" width="160" height="144"></canvas>
+            #top-bar {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-shrink: 0;
+                padding: 2px 0;
+            }
 
-    <p>
-        <label for="rom-input" class="button">Load ROM</label>
-        <input type="file" id="rom-input" accept=".gb,.gbc,.bin">
-    </p>
+            #top-bar label {
+                color: #c0a060;
+                text-transform: uppercase;
+                font-size: var(--fs-btn);
+                letter-spacing: 1px;
+            }
 
-    <p id="save-controls" style="display: none;">
-        <button id="download-save" class="button">Download Save</button>
-        <label for="load-save" class="button">Load Save</label>
-        <input type="file" id="load-save" accept=".sav">
-    </p>
+            #top-bar input {
+                display: none;
+            }
 
-    <div id="camera-live" style="display: none;">
-        <h2>Camera Live View</h2>
-        <canvas id="live-capture" width="128" height="112" style="width: 256px; height: 224px; background: #000;"></canvas>
-    </div>
+            #rom-file {
+                background: #1a1a1a;
+                color: #ddd;
+                border: 1px solid #c0a060;
+                padding: 2px 6px;
+                font-family: inherit;
+                font-size: var(--fs-btn);
+                max-width: 220px;
+            }
 
-    <div id="gallery" style="display: none;">
-        <h2>Camera Gallery</h2>
-        <div id="gallery-grid" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
-    </div>
+            #rom-name {
+                color: #6f6;
+                font-size: var(--fs-btn);
+            }
 
-    <script type="module" src="bundle.js"></script>
+            .top-sep {
+                width: 1px;
+                align-self: stretch;
+                background: #444;
+            }
 
-</body>
+            /* ── Panels ───────────────────────────────────────────────────────── */
+
+            .grid {
+                flex: 1;
+                min-height: 0;
+                display: grid;
+                gap: var(--gap);
+                /*
+                4-column, 2-row layout — controls merged into screen panel.
+                Col 1: Screen+Controls (top) / Camera (bottom)
+                Col 2: Disassembly (full height)
+                Col 3: Memory (top) / Tiles (bottom)
+                Col 4: CPU (top) / PPU+IO (bottom)
+                */
+                grid-template-columns:
+                    minmax(300px, 1.5fr) minmax(180px, 1fr)
+                    minmax(180px, 1fr) minmax(180px, 0.85fr);
+                grid-template-rows: 2fr 3fr;
+            }
+
+            .panel {
+                border: 2px solid #c0a060;
+                background: #1a1a1a;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+                min-width: 0;
+                overflow: hidden;
+            }
+
+            .panel-title {
+                text-align: center;
+                text-transform: uppercase;
+                letter-spacing: 2px;
+                font-size: var(--fs-title);
+                color: #c0a060;
+                padding: 2px 0;
+                border-bottom: 1px solid #c0a060;
+                background: #222;
+                flex-shrink: 0;
+            }
+
+            .panel-body {
+                padding: var(--gap);
+                flex: 1;
+                min-height: 0;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .panel-body pre {
+                font-family: "Courier New", Courier, monospace;
+                font-size: var(--fs-pre);
+                line-height: 1.5;
+                white-space: pre;
+                color: #ddd;
+                flex-shrink: 0; /* natural height by default; panels scroll */
+            }
+
+            /* ── Column 1: Screen+Controls / Camera ───────────────────────── */
+
+            #panel-screen {
+                grid-column: 1;
+                grid-row: 1;
+            }
+            #panel-screen .panel-body {
+                padding: 0;
+                gap: 0;
+                align-items: center; /* centre canvas horizontally when height-constrained */
+            }
+
+            #screen {
+                display: block;
+                max-width: 100%;
+                max-height: 100%; /* shrink with the panel */
+                aspect-ratio: 160 / 144;
+                image-rendering: pixelated;
+                background: #000;
+                flex: 1;
+                min-height: 0; /* allow flex shrink */
+                object-fit: contain;
+            }
+
+            /* Controls toolbar — lives inside the screen panel */
+            #controls-bar {
+                display: flex;
+                align-items: center;
+                gap: clamp(3px, 0.4vw, 8px);
+                flex-wrap: wrap;
+                padding: clamp(2px, 0.3vh, 6px) var(--gap);
+                border-top: 1px solid #c0a060;
+                background: #1e1e1e;
+                flex-shrink: 0;
+            }
+
+            .ctrl-btn {
+                background: #222;
+                color: #ddd;
+                border: 1px solid #c0a060;
+                padding: clamp(1px, 0.3vh, 4px) clamp(4px, 0.5vw, 10px);
+                font-family: inherit;
+                font-size: var(--fs-btn);
+                cursor: pointer;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                white-space: nowrap;
+            }
+
+            .ctrl-btn:hover {
+                background: #333;
+            }
+            .ctrl-btn:active,
+            .ctrl-btn.active {
+                background: #c0a060;
+                color: #111;
+            }
+
+            .ctrl-sep {
+                width: 1px;
+                align-self: stretch;
+                background: #444;
+            }
+
+            #speed-select {
+                background: #222;
+                color: #ddd;
+                border: 1px solid #c0a060;
+                font-family: inherit;
+                font-size: var(--fs-btn);
+                padding: 1px 2px;
+            }
+
+            #frame-info {
+                color: #888;
+                font-size: var(--fs-small);
+                font-variant-numeric: tabular-nums; /* fixed-width digits prevent layout shift */
+                text-align: center;
+                padding: 1px var(--gap);
+                background: #1a1a1a; /* explicit bg forces clean repaint */
+                flex-shrink: 0;
+                white-space: nowrap;
+            }
+
+            #panel-camera {
+                grid-column: 1;
+                grid-row: 2;
+            }
+            #panel-camera .panel-body {
+                gap: var(--gap);
+                overflow-y: auto;
+            }
+
+            #camera-status {
+                font-size: var(--fs-small);
+                color: #888;
+            }
+            .camera-row {
+                display: flex;
+                gap: var(--gap);
+                align-items: flex-start;
+            }
+            .camera-row > div {
+                flex: 1;
+                min-width: 0;
+            }
+
+            .camera-sub-label {
+                font-size: var(--fs-small);
+                color: #999;
+                margin-bottom: 2px;
+            }
+
+            #live-capture,
+            #webcam-preview {
+                display: block;
+                image-rendering: pixelated;
+                background: #000;
+                width: 100%;
+                aspect-ratio: 128 / 112;
+            }
+
+            #gallery-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 3px;
+            }
+
+            #gallery-grid canvas {
+                display: block;
+                image-rendering: pixelated;
+                background: #000;
+            }
+
+            .gallery-slot {
+                text-align: center;
+                font-size: var(--fs-small);
+                color: #888;
+            }
+
+            .webcam-controls {
+                display: flex;
+                gap: 6px;
+                align-items: center;
+                margin-top: 2px;
+            }
+
+            .webcam-status-text {
+                font-size: var(--fs-small);
+                color: #888;
+            }
+
+            .gallery-section {
+                margin-top: 4px;
+            }
+
+            .cam-btn {
+                background: #222;
+                color: #ddd;
+                border: 1px solid #c0a060;
+                padding: clamp(1px, 0.3vh, 4px) clamp(4px, 0.5vw, 10px);
+                font-family: inherit;
+                font-size: var(--fs-btn);
+                cursor: pointer;
+            }
+            .cam-btn:hover {
+                background: #333;
+            }
+
+            /* ── Column 2: Disassembly (full height) ──────────────────────── */
+
+            #panel-disasm {
+                grid-column: 2;
+                grid-row: 1 / 3;
+            }
+            #panel-disasm .panel-body {
+                overflow-y: auto;
+            }
+            #disasm-pre {
+                flex: 1;
+                min-height: 0;
+            }
+            #disasm-pre .current-pc {
+                background: #335;
+                color: #fff;
+                display: block;
+            }
+
+            /* ── Column 3: Memory / Tiles ─────────────────────────────────── */
+
+            #panel-memory {
+                grid-column: 3;
+                grid-row: 1;
+            }
+            #panel-memory .panel-body {
+                overflow-y: auto;
+            }
+
+            #mem-controls {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                margin-bottom: 2px;
+                flex-shrink: 0;
+            }
+            #mem-controls label {
+                color: #999;
+                font-size: var(--fs-small);
+            }
+
+            #mem-addr-input {
+                background: #222;
+                color: #6cf;
+                border: 1px solid #c0a060;
+                font-family: inherit;
+                font-size: var(--fs-pre);
+                padding: 1px 4px;
+                width: 5ch;
+            }
+
+            .mem-goto-btn {
+                padding: 2px 8px;
+            }
+
+            #mem-pre {
+                flex: 1;
+                overflow-y: auto;
+            }
+
+            #panel-tiles {
+                grid-column: 3;
+                grid-row: 2;
+            }
+            .tiles-body {
+                align-items: center;
+                overflow-y: auto;
+            }
+            #tile-canvas {
+                display: block;
+                image-rendering: pixelated;
+                width: 100%;
+                background: #000;
+            }
+
+            /* ── Column 4: CPU / PPU+IO ───────────────────────────────────── */
+
+            #panel-cpu {
+                grid-column: 4;
+                grid-row: 1;
+            }
+            #panel-cpu .panel-body {
+                overflow-y: auto;
+            }
+            #cpu-pre {
+                flex: 1;
+                min-height: 0;
+            }
+
+            /* PPU + IO merged into one panel for row 2 */
+            #panel-ppu-io {
+                grid-column: 4;
+                grid-row: 2;
+            }
+            #panel-ppu-io .panel-body {
+                overflow-y: auto;
+                overflow-x: hidden;
+                gap: 2px;
+            }
+
+            .sub-heading {
+                color: #c0a060;
+                font-size: var(--fs-small);
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                border-bottom: 1px solid #333;
+                padding-bottom: 1px;
+                margin-top: 4px;
+                flex-shrink: 0;
+            }
+            .sub-heading:first-child {
+                margin-top: 0;
+            }
+
+            /* Joypad visual */
+            .joypad-grid {
+                display: inline-grid;
+                grid-template-columns:
+                    repeat(3, clamp(18px, 1.8vw, 30px))
+                    clamp(6px, 0.6vw, 12px) repeat(2, clamp(18px, 1.8vw, 30px));
+                grid-template-rows: repeat(3, clamp(18px, 1.8vw, 30px));
+                gap: 2px;
+                margin-top: 2px;
+                flex-shrink: 0;
+            }
+
+            .jp-btn {
+                text-align: center;
+                font-size: var(--fs-small);
+                color: #666;
+                border: 1px solid #444;
+                background: #222;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .jp-btn.pressed {
+                color: #fff;
+                background: #6a4;
+                border-color: #8c6;
+            }
+
+            #serial-output {
+                max-height: 50px;
+                overflow-y: auto;
+                font-size: var(--fs-small);
+                color: #aaa;
+                border-top: 1px solid #333;
+                margin-top: 2px;
+                padding-top: 2px;
+            }
+
+            /* ── Responsive ───────────────────────────────────────────────── */
+
+            /* Medium: drop memory+tiles columns */
+            @media (max-width: 1400px) {
+                .grid {
+                    grid-template-columns:
+                        minmax(280px, 1.4fr) minmax(180px, 1fr)
+                        minmax(180px, 0.85fr);
+                    grid-template-rows: 2fr 3fr;
+                }
+                #panel-screen {
+                    grid-column: 1;
+                    grid-row: 1;
+                }
+                #panel-camera {
+                    grid-column: 1;
+                    grid-row: 2;
+                }
+                #panel-disasm {
+                    grid-column: 2;
+                    grid-row: 1 / 3;
+                }
+                #panel-cpu {
+                    grid-column: 3;
+                    grid-row: 1;
+                }
+                #panel-ppu-io {
+                    grid-column: 3;
+                    grid-row: 2;
+                }
+                #panel-memory {
+                    display: none;
+                }
+                #panel-tiles {
+                    display: none;
+                }
+            }
+
+            /* Narrow: 2-column stack */
+            @media (max-width: 1000px) {
+                html,
+                body {
+                    overflow: auto;
+                }
+                .grid {
+                    grid-template-columns: 1fr 1fr;
+                    grid-template-rows: auto;
+                    height: auto;
+                }
+                #panel-screen {
+                    grid-column: 1;
+                    grid-row: 1;
+                }
+                #panel-cpu {
+                    grid-column: 2;
+                    grid-row: 1;
+                }
+                #panel-camera {
+                    grid-column: 1;
+                    grid-row: 2;
+                    display: flex;
+                }
+                #panel-ppu-io {
+                    grid-column: 2;
+                    grid-row: 2;
+                }
+                #panel-disasm {
+                    grid-column: 1;
+                    grid-row: 3;
+                    min-height: 300px;
+                }
+                #panel-memory {
+                    grid-column: 2;
+                    grid-row: 3;
+                    min-height: 280px;
+                    display: flex;
+                }
+                #panel-tiles {
+                    grid-column: 1 / 3;
+                    grid-row: 4;
+                    display: flex;
+                }
+            }
+
+            /* Very narrow: 1-column */
+            @media (max-width: 700px) {
+                .grid {
+                    grid-template-columns: 1fr;
+                }
+                .grid > .panel {
+                    grid-column: 1 !important;
+                    display: flex !important;
+                }
+                #panel-screen {
+                    grid-row: 1;
+                }
+                #panel-cpu {
+                    grid-row: 2;
+                }
+                #panel-disasm {
+                    grid-row: 3;
+                    min-height: 300px;
+                }
+                #panel-ppu-io {
+                    grid-row: 4;
+                }
+                #panel-camera {
+                    grid-row: 5;
+                }
+                #panel-memory {
+                    grid-row: 6;
+                    min-height: 280px;
+                }
+                #panel-tiles {
+                    grid-row: 7;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <!-- Top bar: ROM + Save -->
+        <div id="top-bar">
+            <label class="ctrl-btn" for="rom-file">load rom</label>
+            <input type="file" id="rom-file" accept=".gb,.gbc,.bin,.rom" />
+            <span id="rom-name"><label>no rom loaded</label></span>
+            <div class="top-sep"></div>
+            <button class="ctrl-btn" id="download-save">download save</button>
+            <label class="ctrl-btn" for="load-save">load save</label>
+            <input type="file" id="load-save" accept=".sav" hidden />
+        </div>
+
+        <div class="grid">
+            <!-- Col 1 Row 1: Screen + Controls -->
+            <div class="panel" id="panel-screen">
+                <div class="panel-title">screen</div>
+                <div class="panel-body">
+                    <canvas id="screen" width="160" height="144"></canvas>
+                    <div id="controls-bar">
+                        <button class="ctrl-btn" id="btn-play" title="Space">
+                            &#9654; play
+                        </button>
+                        <button class="ctrl-btn" id="btn-pause" title="Space">
+                            &#9646;&#9646; pause
+                        </button>
+                        <button class="ctrl-btn" id="btn-step-frame" title="F">
+                            &#9654;| frame
+                        </button>
+                        <button class="ctrl-btn" id="btn-step-instr" title="N">
+                            &#8677; instr
+                        </button>
+                        <div class="ctrl-sep"></div>
+                        <select id="speed-select">
+                            <option value="0.25">0.25x</option>
+                            <option value="0.5">0.5x</option>
+                            <option value="1">1x</option>
+                            <option value="2">2x</option>
+                            <option value="4">4x</option>
+                            <option value="8">8x</option>
+                        </select>
+                    </div>
+                    <div id="frame-info"></div>
+                </div>
+            </div>
+
+            <!-- Col 1 Row 3: Camera -->
+            <div class="panel" id="panel-camera">
+                <div class="panel-title">Camera</div>
+                <div class="panel-body">
+                    <div id="camera-status">No camera ROM loaded</div>
+                    <div class="camera-row">
+                        <div>
+                            <div class="camera-sub-label">LIVE CAPTURE</div>
+                            <canvas
+                                id="live-capture"
+                                width="128"
+                                height="112"
+                            ></canvas>
+                        </div>
+                        <div>
+                            <div class="camera-sub-label">WEBCAM FEED</div>
+                            <canvas
+                                id="webcam-preview"
+                                width="128"
+                                height="112"
+                            ></canvas>
+                        </div>
+                    </div>
+                    <div class="webcam-controls">
+                        <button class="cam-btn" id="btn-webcam-toggle">
+                            Enable Webcam
+                        </button>
+                        <span
+                            id="webcam-status"
+                            class="webcam-status-text"
+                        ></span>
+                    </div>
+                    <div class="gallery-section">
+                        <div class="camera-sub-label">
+                            GALLERY (saved photos)
+                        </div>
+                        <div id="gallery-grid"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 2: Disassembly (full height) -->
+            <div class="panel" id="panel-disasm">
+                <div class="panel-title">Disassembly</div>
+                <div class="panel-body">
+                    <pre id="disasm-pre"></pre>
+                </div>
+            </div>
+
+            <!-- Col 3 Top: Memory -->
+            <div class="panel" id="panel-memory">
+                <div class="panel-title">Memory</div>
+                <div class="panel-body">
+                    <div id="mem-controls">
+                        <label>Addr:</label>
+                        <input
+                            type="text"
+                            id="mem-addr-input"
+                            value="0000"
+                            maxlength="4"
+                        />
+                        <button class="ctrl-btn mem-goto-btn" id="mem-goto">
+                            Go
+                        </button>
+                    </div>
+                    <pre id="mem-pre"></pre>
+                </div>
+            </div>
+
+            <!-- Col 3 Bottom: Tiles -->
+            <div class="panel" id="panel-tiles">
+                <div class="panel-title">Tiles</div>
+                <div class="panel-body tiles-body">
+                    <canvas id="tile-canvas" width="128" height="192"></canvas>
+                </div>
+            </div>
+
+            <!-- Col 4 Row 1: CPU -->
+            <div class="panel" id="panel-cpu">
+                <div class="panel-title">CPU Registers</div>
+                <div class="panel-body">
+                    <pre id="cpu-pre"></pre>
+                </div>
+            </div>
+
+            <!-- Col 4 Row 2: PPU + IO (merged) -->
+            <div class="panel" id="panel-ppu-io">
+                <div class="panel-title">PPU / IO</div>
+                <div class="panel-body">
+                    <div class="sub-heading">PPU</div>
+                    <pre id="ppu-pre"></pre>
+                    <div class="sub-heading">Timer</div>
+                    <pre id="timer-pre"></pre>
+                    <div class="sub-heading">Interrupts</div>
+                    <pre id="int-pre"></pre>
+                    <div class="sub-heading">Joypad</div>
+                    <div class="joypad-grid">
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn" id="jp-up">U</div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn" id="jp-a">A</div>
+                        <div class="jp-btn" id="jp-b">B</div>
+
+                        <div class="jp-btn" id="jp-left">L</div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn" id="jp-right">R</div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn" id="jp-select">Sel</div>
+                        <div class="jp-btn" id="jp-start">Sta</div>
+
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn" id="jp-down">D</div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn"></div>
+                        <div class="jp-btn"></div>
+                    </div>
+                    <div class="sub-heading">Serial</div>
+                    <pre id="serial-output"></pre>
+                </div>
+            </div>
+        </div>
+
+        <script type="module" src="debug-bundle.js"></script>
+    </body>
 </html>
