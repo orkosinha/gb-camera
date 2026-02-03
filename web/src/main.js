@@ -1,213 +1,200 @@
-// ── Entry point — WASM init, frame loop, event wiring ───────────────
+// ── Entry point ─────────────────────────────────────────────────────
 
-import init, { GameBoy } from '../pkg/gb_emu.js';
-import { createRenderer } from './renderer.js';
-import { createPanels } from './panels.js';
-import { createInput } from './input.js';
-import { createCamera } from './camera.js';
-import { createSave } from './save.js';
-
-// ── State ───────────────────────────────────────────────────────────
+import init, { GameBoy } from "../pkg/gb_emu.js";
+import { createRenderer } from "./renderer.js";
+import { createPanels } from "./panels.js";
+import { createInput } from "./input.js";
+import { createCamera } from "./camera.js";
+import { createSave } from "./save.js";
 
 const state = {
-    emulator: null,
-    wasmMemory: null,
-    paused: true,
-    stepMode: null,       // null | 'frame' | 'instruction'
-    speed: 1,
-    frameCounter: 0,
-    panelUpdateCounter: 0,
-    memViewAddr: 0x0000,
-    currentRomName: 'game',
-    isGameBoyCamera: false,
+  emulator: null,
+  wasmMemory: null,
+  paused: true,
+  stepMode: null,
+  speed: 1,
+  frameCounter: 0,
+  panelUpdateCounter: 0,
+  memViewAddr: 0x0000,
+  currentRomName: "game",
+  isGameBoyCamera: false,
 };
 
-// ── Boot ────────────────────────────────────────────────────────────
-
 async function main() {
-    const wasm = await init();
-    state.wasmMemory = wasm.memory;
+  const wasm = await init();
+  state.wasmMemory = wasm.memory;
 
-    // DOM refs
-    const screenCanvas = document.getElementById('screen');
-    const tileCanvas = document.getElementById('tile-canvas');
-    const frameInfo = document.getElementById('frame-info');
+  // DOM
+  const $ = (id) => document.getElementById(id);
+  const frameInfo = $("frame-info");
+  const cameraPanel = $("panel-camera");
 
-    const panelRefs = {
-        cpuPre: document.getElementById('cpu-pre'),
-        ppuPre: document.getElementById('ppu-pre'),
-        disPre: document.getElementById('disasm-pre'),
-        memPre: document.getElementById('mem-pre'),
-        timerPre: document.getElementById('timer-pre'),
-        intPre: document.getElementById('int-pre'),
-        serialPre: document.getElementById('serial-output'),
-    };
+  // Modules
+  const renderer = createRenderer(state, $("screen"), $("tile-canvas"));
+  const { updateAll, buttonState } = createPanels(state, {
+    disPre: $("disasm-pre"),
+    memPre: $("mem-pre"),
+    serialPre: $("serial-output"),
+  });
+  const input = createInput(state, buttonState);
+  const camera = createCamera(state, {
+    cameraStatus: $("camera-status"),
+    liveCapture: $("live-capture"),
+    webcamPreview: $("webcam-preview"),
+    webcamStatus: $("webcam-status"),
+    btnWebcamToggle: $("btn-webcam-toggle"),
+    galleryGrid: $("gallery-grid"),
+  });
+  const save = createSave(state);
 
-    const cameraRefs = {
-        cameraStatus: document.getElementById('camera-status'),
-        liveCapture: document.getElementById('live-capture'),
-        webcamPreview: document.getElementById('webcam-preview'),
-        webcamStatus: document.getElementById('webcam-status'),
-        btnWebcamToggle: document.getElementById('btn-webcam-toggle'),
-        galleryGrid: document.getElementById('gallery-grid'),
-    };
+  // ROM loading
+  $("rom-file").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-    // Module factories
-    const renderer = createRenderer(state, screenCanvas, tileCanvas);
-    const { updateAll, buttonState } = createPanels(state, panelRefs);
-    const input = createInput(state, buttonState);
-    const camera = createCamera(state, cameraRefs);
-    const save = createSave(state);
+    const data = new Uint8Array(await file.arrayBuffer());
+    state.emulator = new GameBoy();
+    state.emulator.load_rom(data);
 
-    // ── ROM loading ─────────────────────────────────────────────────
+    $("rom-name").textContent = file.name;
+    state.currentRomName = file.name.replace(/\.(gb|gbc|bin|rom)$/i, "");
 
-    document.getElementById('rom-file').addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const data = new Uint8Array(await file.arrayBuffer());
+    const cartType = data.length >= 0x148 ? data[0x147] : 0;
+    state.isGameBoyCamera = cartType === 0xfc;
 
-        state.emulator = new GameBoy();
-        state.emulator.load_rom(data);
-        document.getElementById('rom-name').textContent = file.name;
-        state.currentRomName = file.name.replace(/\.(gb|gbc|bin|rom)$/i, '');
+    if (state.isGameBoyCamera) {
+      cameraPanel.style.display = "block";
+      camera.startCamera();
+      await camera.initWebcam();
+      if (camera.isWebcamEnabled()) camera.captureFrame();
+    } else {
+      cameraPanel.style.display = "none";
+      camera.stopCamera();
+    }
 
-        // Detect Game Boy Camera (cart type 0xFC)
-        const cartType = data.length >= 0x148 ? data[0x147] : 0;
-        state.isGameBoyCamera = (cartType === 0xFC);
+    state.paused = true;
+    state.frameCounter = 0;
+    renderer.renderScreen();
+    updateAll();
+    renderer.renderTiles();
+  });
 
-        if (state.isGameBoyCamera) {
-            camera.startCamera();
-            await camera.initWebcam();
-            if (camera.isWebcamEnabled()) camera.captureFrame();
-        } else {
-            camera.stopCamera();
+  // GB Buttons
+  $("btn-play").onclick = () => {
+    state.paused = false;
+  };
+  $("btn-pause").onclick = () => {
+    state.paused = true;
+    if (state.emulator) {
+      updateAll();
+      renderer.renderTiles();
+    }
+  };
+  $("btn-step-frame").onclick = () => {
+    if (!state.emulator) return;
+    state.paused = true;
+    state.stepMode = "frame";
+  };
+  $("btn-step-instr").onclick = () => {
+    if (!state.emulator) return;
+    state.paused = true;
+    state.stepMode = "instruction";
+  };
+  $("speed-select").onchange = (e) => {
+    state.speed = parseFloat(e.target.value);
+  };
+
+  // Memory navigation
+  const memInput = $("mem-addr-input");
+  const memGo = () => {
+    const val = parseInt(memInput.value, 16);
+    if (!isNaN(val)) {
+      state.memViewAddr = val & 0xffff;
+      memInput.value = state.memViewAddr
+        .toString(16)
+        .toUpperCase()
+        .padStart(4, "0");
+      if (state.emulator) updateAll();
+    }
+  };
+  const memJump = (delta) => {
+    state.memViewAddr = (state.memViewAddr + delta) & 0xffff;
+    memInput.value = state.memViewAddr
+      .toString(16)
+      .toUpperCase()
+      .padStart(4, "0");
+    if (state.emulator) updateAll();
+  };
+
+  $("mem-goto").onclick = memGo;
+  memInput.onkeydown = (e) => {
+    if (e.key === "Enter") memGo();
+  };
+  $("mem-prev-page").onclick = () => memJump(-0x100);
+  $("mem-prev").onclick = () => memJump(-0x10);
+  $("mem-next").onclick = () => memJump(0x10);
+  $("mem-next-page").onclick = () => memJump(0x100);
+
+  // Camera
+  $("btn-webcam-toggle").onclick = () => {
+    camera.isWebcamEnabled() ? camera.stopWebcam() : camera.initWebcam();
+  };
+
+  // Save/Load
+  $("download-save").onclick = () => save.download();
+  $("load-save").addEventListener("change", async (e) => {
+    if (e.target.files[0]) await save.load(e.target.files[0]);
+    e.target.value = "";
+  });
+
+  // Keyboard
+  input.attach();
+
+  // Frame loop
+  function tick() {
+    if (state.emulator) {
+      if (!state.paused) {
+        if (
+          state.isGameBoyCamera &&
+          camera.isWebcamEnabled() &&
+          state.frameCounter % 4 === 0
+        ) {
+          camera.captureFrame();
         }
+        for (let i = 0; i < state.speed; i++) state.emulator.step_frame();
+        state.frameCounter += state.speed;
+        renderer.renderScreen();
+        if (state.isGameBoyCamera) camera.updateLiveView();
 
-        state.paused = true;
-        state.frameCounter = 0;
+        if (++state.panelUpdateCounter >= 10) {
+          state.panelUpdateCounter = 0;
+          updateAll();
+          renderer.renderTiles();
+        }
+      } else if (state.stepMode === "frame") {
+        if (state.isGameBoyCamera && camera.isWebcamEnabled())
+          camera.captureFrame();
+        state.emulator.step_frame();
+        state.frameCounter++;
+        state.stepMode = null;
+        renderer.renderScreen();
+        if (state.isGameBoyCamera) camera.updateLiveView();
+        updateAll();
+        renderer.renderTiles();
+      } else if (state.stepMode === "instruction") {
+        state.emulator.step_instruction();
+        state.stepMode = null;
         renderer.renderScreen();
         updateAll();
         renderer.renderTiles();
-    });
+      }
 
-    // ── Control buttons ─────────────────────────────────────────────
-
-    document.getElementById('btn-play').addEventListener('click', (e) => {
-        state.paused = false;
-        e.target.blur();
-    });
-    document.getElementById('btn-pause').addEventListener('click', (e) => {
-        state.paused = true;
-        if (state.emulator) { updateAll(); renderer.renderTiles(); }
-        e.target.blur();
-    });
-    document.getElementById('btn-step-frame').addEventListener('click', (e) => {
-        if (!state.emulator) return;
-        if (!state.paused) state.paused = true;
-        state.stepMode = 'frame';
-        e.target.blur();
-    });
-    document.getElementById('btn-step-instr').addEventListener('click', (e) => {
-        if (!state.emulator) return;
-        if (!state.paused) state.paused = true;
-        state.stepMode = 'instruction';
-        e.target.blur();
-    });
-
-    document.getElementById('speed-select').addEventListener('change', (e) => {
-        state.speed = parseFloat(e.target.value);
-    });
-
-    // ── Memory address input ────────────────────────────────────────
-
-    document.getElementById('mem-goto').addEventListener('click', () => {
-        const val = parseInt(document.getElementById('mem-addr-input').value, 16);
-        if (!isNaN(val)) { state.memViewAddr = val & 0xFFFF; if (state.emulator) updateAll(); }
-    });
-    document.getElementById('mem-addr-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            document.getElementById('mem-goto').click();
-            e.preventDefault();
-        }
-    });
-
-    // ── Webcam toggle ───────────────────────────────────────────────
-
-    document.getElementById('btn-webcam-toggle').addEventListener('click', () => {
-        if (camera.isWebcamEnabled()) {
-            camera.stopWebcam();
-        } else {
-            camera.initWebcam();
-        }
-    });
-
-    // ── Save / Load ─────────────────────────────────────────────────
-
-    document.getElementById('download-save').addEventListener('click', () => save.download());
-    document.getElementById('load-save').addEventListener('change', async (e) => {
-        const file = e.target.files[0];
-        if (file) await save.load(file);
-        e.target.value = '';
-    });
-
-    // ── Keyboard ────────────────────────────────────────────────────
-
-    input.attach();
-
-    // ── Frame loop ──────────────────────────────────────────────────
-
-    function runFrame() {
-        if (!state.emulator) {
-            requestAnimationFrame(runFrame);
-            return;
-        }
-
-        if (!state.paused) {
-            // Capture webcam every 4 frames (~15fps)
-            if (state.isGameBoyCamera && camera.isWebcamEnabled() && state.frameCounter % 4 === 0) {
-                camera.captureFrame();
-            }
-
-            for (let i = 0; i < state.speed; i++) {
-                state.emulator.step_frame();
-            }
-            state.frameCounter += state.speed;
-            renderer.renderScreen();
-
-            if (state.isGameBoyCamera) {
-                camera.updateLiveView();
-            }
-
-            state.panelUpdateCounter++;
-            if (state.panelUpdateCounter >= 10) {
-                state.panelUpdateCounter = 0;
-                updateAll();
-                renderer.renderTiles();
-            }
-        } else if (state.stepMode === 'frame') {
-            if (state.isGameBoyCamera && camera.isWebcamEnabled()) {
-                camera.captureFrame();
-            }
-            state.emulator.step_frame();
-            state.frameCounter++;
-            state.stepMode = null;
-            renderer.renderScreen();
-            if (state.isGameBoyCamera) camera.updateLiveView();
-            updateAll();
-            renderer.renderTiles();
-        } else if (state.stepMode === 'instruction') {
-            state.emulator.step_instruction();
-            state.stepMode = null;
-            renderer.renderScreen();
-            updateAll();
-            renderer.renderTiles();
-        }
-
-        frameInfo.textContent = `Frame ${String(state.frameCounter).padStart(7)}  ${state.paused ? 'PAUSED ' : 'RUNNING'}`;
-        requestAnimationFrame(runFrame);
+      frameInfo.textContent = `Frame ${state.frameCounter} ${state.paused ? "[PAUSED]" : ""}`;
     }
+    requestAnimationFrame(tick);
+  }
 
-    requestAnimationFrame(runFrame);
+  requestAnimationFrame(tick);
 }
 
 main().catch(console.error);

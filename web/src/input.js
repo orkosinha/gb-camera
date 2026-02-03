@@ -1,8 +1,6 @@
-// ── Keyboard handling ───────────────────────────────────────────────
+// ── Input handling (keyboard + touch) ───────────────────────────────
 
-// Button indices must match joypad::Button::from_u8 in Rust:
-//   0=A, 1=B, 2=Select, 3=Start, 4=Right, 5=Left, 6=Up, 7=Down
-const BUTTON_MAP = {
+const BUTTONS = {
     'z': 0, 'Z': 0,       // A
     'x': 1, 'X': 1,       // B
     Shift: 2,              // Select
@@ -13,57 +11,153 @@ const BUTTON_MAP = {
     ArrowDown: 7,
 };
 
-const BUTTON_NAMES = {
-    0: 'a', 1: 'b', 2: 'select', 3: 'start',
-    4: 'right', 5: 'left', 6: 'up', 7: 'down',
-};
+const NAMES = ['a', 'b', 'select', 'start', 'right', 'left', 'up', 'down'];
 
 export function createInput(state, buttonState) {
-    function handleKeyDown(e) {
-        if (e.target.tagName !== 'INPUT') {
-            if (e.code === 'Space') {
-                e.preventDefault();
-                state.paused = !state.paused;
-                if (!state.paused) { state.panelUpdateCounter = 0; }
-                return;
-            }
-            if (e.key === 'n' || e.key === 'N') {
-                if (state.paused && state.emulator) { state.stepMode = 'instruction'; }
-                return;
-            }
-            if (e.key === 'f' && !e.ctrlKey && !e.metaKey) {
-                if (state.paused && state.emulator) { state.stepMode = 'frame'; }
-                return;
-            }
+    // Track active touches per button
+    const activeTouches = new Map();
+
+    function pressButton(btn) {
+        if (!state.emulator || state.paused) return;
+        state.emulator.set_button(btn, true);
+        buttonState[NAMES[btn]] = true;
+    }
+
+    function releaseButton(btn) {
+        if (!state.emulator) return;
+        state.emulator.set_button(btn, false);
+        buttonState[NAMES[btn]] = false;
+    }
+
+    // Keyboard handlers
+    function onKeyDown(e) {
+        if (e.target.tagName === 'INPUT') return;
+
+        if (e.code === 'Space') {
+            e.preventDefault();
+            state.paused = !state.paused;
+            return;
+        }
+        if (e.key === 'n' || e.key === 'N') {
+            if (state.paused && state.emulator) state.stepMode = 'instruction';
+            return;
+        }
+        if (e.key === 'f' && !e.ctrlKey && !e.metaKey) {
+            if (state.paused && state.emulator) state.stepMode = 'frame';
+            return;
         }
 
-        if (!state.emulator || state.paused) return;
-        const btn = BUTTON_MAP[e.key];
+        const btn = BUTTONS[e.key];
         if (btn !== undefined) {
             e.preventDefault();
-            state.emulator.set_button(btn, true);
-            buttonState[BUTTON_NAMES[btn]] = true;
+            pressButton(btn);
         }
     }
 
-    function handleKeyUp(e) {
-        if (!state.emulator) return;
-        const btn = BUTTON_MAP[e.key];
+    function onKeyUp(e) {
+        const btn = BUTTONS[e.key];
         if (btn !== undefined) {
-            state.emulator.set_button(btn, false);
-            buttonState[BUTTON_NAMES[btn]] = false;
+            releaseButton(btn);
         }
     }
 
-    function attach() {
-        window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
+    // Touch handlers for gamepad
+    function onTouchStart(e) {
+        const target = e.target.closest('.gp-btn');
+        if (!target) return;
+        e.preventDefault();
+
+        const btn = parseInt(target.dataset.btn, 10);
+        if (isNaN(btn)) return;
+
+        for (const touch of e.changedTouches) {
+            activeTouches.set(touch.identifier, { btn, target });
+        }
+        target.classList.add('pressed');
+        pressButton(btn);
     }
 
-    function detach() {
-        window.removeEventListener('keydown', handleKeyDown);
-        window.removeEventListener('keyup', handleKeyUp);
+    function onTouchEnd(e) {
+        for (const touch of e.changedTouches) {
+            const info = activeTouches.get(touch.identifier);
+            if (info) {
+                info.target.classList.remove('pressed');
+                releaseButton(info.btn);
+                activeTouches.delete(touch.identifier);
+            }
+        }
     }
 
-    return { attach, detach };
+    function onTouchCancel(e) {
+        onTouchEnd(e);
+    }
+
+    // Mouse handlers for desktop testing
+    function onMouseDown(e) {
+        const target = e.target.closest('.gp-btn');
+        if (!target) return;
+        e.preventDefault();
+
+        const btn = parseInt(target.dataset.btn, 10);
+        if (isNaN(btn)) return;
+
+        target.classList.add('pressed');
+        pressButton(btn);
+        target.dataset.mouseDown = '1';
+    }
+
+    function onMouseUp(e) {
+        const target = e.target.closest('.gp-btn');
+        if (!target || !target.dataset.mouseDown) return;
+
+        const btn = parseInt(target.dataset.btn, 10);
+        if (isNaN(btn)) return;
+
+        target.classList.remove('pressed');
+        releaseButton(btn);
+        delete target.dataset.mouseDown;
+    }
+
+    function onMouseLeave(e) {
+        const target = e.target.closest('.gp-btn');
+        if (!target || !target.dataset.mouseDown) return;
+
+        const btn = parseInt(target.dataset.btn, 10);
+        if (!isNaN(btn)) {
+            target.classList.remove('pressed');
+            releaseButton(btn);
+        }
+        delete target.dataset.mouseDown;
+    }
+
+    return {
+        attach() {
+            window.addEventListener('keydown', onKeyDown);
+            window.addEventListener('keyup', onKeyUp);
+
+            const gamepad = document.getElementById('gamepad');
+            if (gamepad) {
+                gamepad.addEventListener('touchstart', onTouchStart, { passive: false });
+                gamepad.addEventListener('touchend', onTouchEnd);
+                gamepad.addEventListener('touchcancel', onTouchCancel);
+                gamepad.addEventListener('mousedown', onMouseDown);
+                gamepad.addEventListener('mouseup', onMouseUp);
+                gamepad.addEventListener('mouseleave', onMouseLeave, true);
+            }
+        },
+        detach() {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('keyup', onKeyUp);
+
+            const gamepad = document.getElementById('gamepad');
+            if (gamepad) {
+                gamepad.removeEventListener('touchstart', onTouchStart);
+                gamepad.removeEventListener('touchend', onTouchEnd);
+                gamepad.removeEventListener('touchcancel', onTouchCancel);
+                gamepad.removeEventListener('mousedown', onMouseDown);
+                gamepad.removeEventListener('mouseup', onMouseUp);
+                gamepad.removeEventListener('mouseleave', onMouseLeave, true);
+            }
+        }
+    };
 }

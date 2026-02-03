@@ -1,153 +1,127 @@
-// ── CPU/PPU/Memory/Timer/Interrupt/Joypad/Serial panel updaters ──────
+// ── Panel updaters ──────────────────────────────────────────────────
 
 import { hex2, hex4, escapeHtml } from './format.js';
 import { disassemble } from './disassembler.js';
 
-export function createPanels(state, domRefs) {
-    const { cpuPre, ppuPre, disPre, memPre, timerPre, intPre, serialPre } = domRefs;
-
+export function createPanels(state, dom) {
     const buttonState = {
         right: false, left: false, up: false, down: false,
         a: false, b: false, select: false, start: false,
     };
 
+    const $ = id => document.getElementById(id);
+
     function updateCPU() {
-        const emu = state.emulator;
-        const a = emu.cpu_a(), f = emu.cpu_f();
-        const bc = emu.cpu_bc(), de = emu.cpu_de(), hl = emu.cpu_hl();
-        const sp = emu.cpu_sp(), pc = emu.cpu_pc();
-        const ime = emu.cpu_ime(), halted = emu.cpu_halted();
+        const e = state.emulator;
+        const f = e.cpu_f();
 
-        const z = (f & 0x80) ? 'Z' : '-';
-        const n = (f & 0x40) ? 'N' : '-';
-        const h = (f & 0x20) ? 'H' : '-';
-        const c = (f & 0x10) ? 'C' : '-';
-
-        cpuPre.textContent =
-            `AF  ${hex2(a)}${hex2(f)}   Flags ${z}${n}${h}${c}\n` +
-            `BC  ${hex4(bc)}\n` +
-            `DE  ${hex4(de)}\n` +
-            `HL  ${hex4(hl)}\n` +
-            `SP  ${hex4(sp)}\n` +
-            `PC  ${hex4(pc)}\n` +
-            `\n` +
-            `IME ${ime ? 'ON ' : 'OFF'}   HALT ${halted ? 'YES' : 'NO '}`;
+        $('r-af').textContent = hex2(e.cpu_a()) + hex2(f);
+        $('r-bc').textContent = hex4(e.cpu_bc());
+        $('r-de').textContent = hex4(e.cpu_de());
+        $('r-hl').textContent = hex4(e.cpu_hl());
+        $('r-sp').textContent = hex4(e.cpu_sp());
+        $('r-pc').textContent = hex4(e.cpu_pc());
+        $('r-flags').textContent =
+            ((f & 0x80) ? 'Z' : '-') +
+            ((f & 0x40) ? 'N' : '-') +
+            ((f & 0x20) ? 'H' : '-') +
+            ((f & 0x10) ? 'C' : '-');
+        $('r-ime').textContent = e.cpu_ime() ? '1' : '0';
+        $('r-halt').textContent = e.cpu_halted() ? '1' : '0';
     }
 
     function updatePPU() {
-        const emu = state.emulator;
-        const mode = emu.ppu_mode();
-        const line = emu.ppu_line();
-        const cycles = emu.ppu_cycles();
-        const lcdc = emu.io_lcdc();
-        const stat = emu.io_stat();
-        const scy = emu.io_scy(), scx = emu.io_scx();
-        const wy = emu.io_wy(), wx = emu.io_wx();
-        const bgp = emu.io_bgp();
-        const obp0 = emu.io_obp0(), obp1 = emu.io_obp1();
+        const e = state.emulator;
+        const mode = e.ppu_mode();
+        const modes = ['HBL', 'VBL', 'OAM', 'DRW'];
 
-        const modeNames = ['HBLANK','VBLANK','OAM','DRAW'];
-        const modeName = (modeNames[mode] || '?').padEnd(6);
-
-        ppuPre.textContent =
-            `Mode   ${mode} ${modeName}  LY ${String(line).padStart(3)}\n` +
-            `Cycles ${String(cycles).padStart(5)}\n` +
-            `LCDC   ${hex2(lcdc)}   STAT ${hex2(stat)}\n` +
-            `  LCD ${(lcdc>>7)&1}  BG  ${lcdc&1}  Win ${(lcdc>>5)&1}\n` +
-            `  OBJ ${(lcdc>>1)&1}  sz  ${(lcdc>>2)&1?'8x16':'8x8 '}\n` +
-            `  Dat ${(lcdc>>4)&1?'$8000':'$8800'}  BGm ${(lcdc>>3)&1?'$9C00':'$9800'}\n` +
-            `  Wnm ${(lcdc>>6)&1?'$9C00':'$9800'}\n` +
-            `SCY ${hex2(scy)}  SCX ${hex2(scx)}\n` +
-            `WY  ${hex2(wy)}  WX  ${hex2(wx)}\n` +
-            `BGP ${hex2(bgp)}  OBP0 ${hex2(obp0)}  OBP1 ${hex2(obp1)}`;
+        $('r-ly').textContent = String(e.ppu_line()).padStart(3);
+        $('r-mode').textContent = `${mode} ${modes[mode] || '?'}`;
+        $('r-lcdc').textContent = hex2(e.io_lcdc());
+        $('r-stat').textContent = hex2(e.io_stat());
+        $('r-scx').textContent = hex2(e.io_scx());
+        $('r-scy').textContent = hex2(e.io_scy());
+        $('r-wx').textContent = hex2(e.io_wx());
+        $('r-wy').textContent = hex2(e.io_wy());
+        $('r-bgp').textContent = hex2(e.io_bgp());
+        $('r-obp0').textContent = hex2(e.io_obp0());
+        $('r-obp1').textContent = hex2(e.io_obp1());
     }
 
     function updateDisassembly() {
-        const emu = state.emulator;
-        const pc = emu.cpu_pc();
-        const readByte = (addr) => emu.read_byte(addr & 0xFFFF);
-        const lines = disassemble(readByte, pc, 24);
+        const e = state.emulator;
+        const pc = e.cpu_pc();
+        const read = addr => e.read_byte(addr & 0xFFFF);
+        const lines = disassemble(read, pc, 16);
 
         let html = '';
-        for (let i = 0; i < lines.length; i++) {
-            const l = lines[i];
-            const prefix = (l.addr === pc) ? '\u25B6 ' : '  ';
-            const line = `${prefix}${hex4(l.addr)}  ${l.rawBytes}  ${l.text}`;
-            if (l.addr === pc) {
-                html += `<span class="current-pc">${escapeHtml(line)}</span>\n`;
-            } else {
-                html += escapeHtml(line) + '\n';
-            }
+        for (const l of lines) {
+            const text = `${hex4(l.addr)} ${l.rawBytes} ${l.text}`;
+            html += l.addr === pc
+                ? `<span class="pc">${escapeHtml(text)}</span>\n`
+                : escapeHtml(text) + '\n';
         }
-        disPre.innerHTML = html;
+        dom.disPre.innerHTML = html;
     }
 
     function updateMemory() {
-        const emu = state.emulator;
+        const e = state.emulator;
         const base = state.memViewAddr & 0xFFF0;
-        const data = emu.read_range(base, 256);
-        let text = '       00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F\n';
-        text += '       -- -- -- -- -- -- -- --  -- -- -- -- -- -- -- --\n';
+        const data = e.read_range(base, 256);
+
+        let text = '      00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F\n';
         for (let row = 0; row < 16; row++) {
             const addr = (base + row * 16) & 0xFFFF;
-            let line = hex4(addr) + '  ';
+            let line = hex4(addr) + ' ';
             let ascii = '';
             for (let col = 0; col < 16; col++) {
                 const b = data[row * 16 + col];
-                line += hex2(b);
-                if (col === 7) line += '  '; else if (col < 15) line += ' ';
+                line += hex2(b) + (col === 7 ? '  ' : ' ');
                 ascii += (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : '.';
             }
-            text += line + '  ' + ascii + '\n';
+            text += line + ascii + '\n';
         }
-        memPre.textContent = text;
+        dom.memPre.textContent = text;
     }
 
     function updateTimer() {
-        const emu = state.emulator;
-        const div = emu.io_div();
-        const tima = emu.io_tima();
-        const tma = emu.io_tma();
-        const tac = emu.io_tac();
+        const e = state.emulator;
+        const tac = e.io_tac();
 
-        const tacEnabled = (tac & 0x04) ? 'ON' : 'OFF';
-        const tacClock = ['4096','262144','65536','16384'][tac & 0x03];
-
-        timerPre.textContent =
-            `DIV  ${hex2(div)}   TIMA ${hex2(tima)}\n` +
-            `TMA  ${hex2(tma)}   TAC  ${hex2(tac)}\n` +
-            `En   ${tacEnabled.padEnd(3)}  Clk  ${tacClock} Hz`;
+        $('r-div').textContent = hex2(e.io_div());
+        $('r-tima').textContent = hex2(e.io_tima());
+        $('r-tma').textContent = hex2(e.io_tma());
+        $('r-tac').textContent = hex2(tac);
     }
 
     function updateInterrupts() {
-        const emu = state.emulator;
-        const ie = emu.io_ie();
-        const ifl = emu.io_if();
-        const names = ['VBlank','LCD','Timer','Serial','Joypad'];
+        const e = state.emulator;
+        const ie = e.io_ie(), ifl = e.io_if();
 
-        let text = '         IE IF\n';
+        $('r-ie').textContent = hex2(ie);
+        $('r-if').textContent = hex2(ifl);
+
+        const ids = ['vbl', 'lcd', 'tim', 'ser', 'joy'];
         for (let i = 0; i < 5; i++) {
-            const e = (ie >> i) & 1;
-            const f = (ifl >> i) & 1;
-            text += `${names[i].padEnd(9)}${e}  ${f}\n`;
+            const en = (ie >> i) & 1, fl = (ifl >> i) & 1;
+            // * = enabled+pending, + = enabled, ! = pending, - = off
+            $(`r-int-${ids[i]}`).textContent = en ? (fl ? '*' : '+') : (fl ? '!' : '-');
         }
-        intPre.textContent = text;
     }
 
     function updateJoypad() {
-        const ids = { up:'jp-up', down:'jp-down', left:'jp-left', right:'jp-right',
-                      a:'jp-a', b:'jp-b', select:'jp-select', start:'jp-start' };
-        for (const [key, id] of Object.entries(ids)) {
-            const el = document.getElementById(id);
-            if (el) el.classList.toggle('pressed', buttonState[key]);
+        const map = {
+            up: 'jp-up', down: 'jp-down', left: 'jp-left', right: 'jp-right',
+            a: 'jp-a', b: 'jp-b', select: 'jp-select', start: 'jp-start'
+        };
+        for (const [key, id] of Object.entries(map)) {
+            $(id)?.classList.toggle('on', buttonState[key]);
         }
     }
 
     function updateSerial() {
         const text = state.emulator.get_serial_output();
-        if (text.length > 0) {
-            serialPre.textContent = text;
-        }
+        if (text) dom.serialPre.textContent = text;
     }
 
     function updateAll() {

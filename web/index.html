@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Game Boy Debug</title>
+        <title>GB Debug</title>
         <style>
             * {
                 margin: 0;
@@ -12,738 +12,721 @@
             }
 
             :root {
-                /* Viewport-scaled font sizes — panels fill at any resolution */
-                --fs-pre: clamp(11px, 1.1vw, 16px);
-                --fs-title: clamp(10px, 0.9vw, 14px);
-                --fs-btn: clamp(11px, 1vw, 15px);
-                --fs-small: clamp(10px, 0.85vw, 13px);
-                --gap: clamp(3px, 0.35vw, 5px);
-            }
-
-            html,
-            body {
-                height: 100%;
-                overflow: hidden;
-                background: #111;
-                color: #ddd;
-                font-family: "Courier New", Courier, monospace;
-                font-size: var(--fs-pre);
+                --gold: #c0a060;
+                --bg: #111;
+                --panel: #1a1a1a;
+                --border: #333;
             }
 
             body {
-                display: flex;
-                flex-direction: column;
-                padding: var(--gap);
-                gap: var(--gap);
+                background: var(--bg);
+                color: #ccc;
+                font:
+                    12px/1.4 "Courier New",
+                    monospace;
             }
 
-            /* ── Top bar ──────────────────────────────────────────────────────── */
+            button,
+            select,
+            input[type="text"] {
+                background: #222;
+                color: #ccc;
+                border: 1px solid var(--gold);
+                font: inherit;
+                padding: 3px 8px;
+                cursor: pointer;
+            }
+            button:hover {
+                background: #333;
+            }
+            button:active {
+                background: var(--gold);
+                color: #000;
+            }
 
-            #top-bar {
+            /* Layout */
+            #app {
+                display: grid;
+                grid-template-columns: 500px 1fr;
+                grid-template-rows: auto 1fr;
+                height: 100vh;
+            }
+
+            header {
+                grid-column: 1 / -1;
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                flex-shrink: 0;
-                padding: 2px 0;
-            }
-
-            #top-bar label {
-                color: #c0a060;
-                text-transform: uppercase;
-                font-size: var(--fs-btn);
-                letter-spacing: 1px;
-            }
-
-            #top-bar input {
-                display: none;
-            }
-
-            #rom-file {
-                background: #1a1a1a;
-                color: #ddd;
-                border: 1px solid #c0a060;
-                padding: 2px 6px;
-                font-family: inherit;
-                font-size: var(--fs-btn);
-                max-width: 220px;
+                padding: 6px 10px;
+                background: #0a0a0a;
+                border-bottom: 1px solid var(--gold);
+                flex-wrap: wrap;
             }
 
             #rom-name {
                 color: #6f6;
-                font-size: var(--fs-btn);
             }
 
-            .top-sep {
-                width: 1px;
-                align-self: stretch;
-                background: #444;
-            }
-
-            /* ── Panels ───────────────────────────────────────────────────────── */
-
-            .grid {
-                flex: 1;
-                min-height: 0;
-                display: grid;
-                gap: var(--gap);
-                /*
-                4-column, 2-row layout — controls merged into screen panel.
-                Col 1: Screen+Controls (top) / Camera (bottom)
-                Col 2: Disassembly (full height)
-                Col 3: Memory (top) / Tiles (bottom)
-                Col 4: CPU (top) / PPU+IO (bottom)
-                */
-                grid-template-columns:
-                    minmax(300px, 1.5fr) minmax(180px, 1fr)
-                    minmax(180px, 1fr) minmax(180px, 0.85fr);
-                grid-template-rows: 2fr 3fr;
-            }
-
-            .panel {
-                border: 2px solid #c0a060;
-                background: #1a1a1a;
+            /* Left column: Screen */
+            #col-left {
+                background: var(--panel);
+                border-right: 1px solid var(--gold);
+                overflow-y: auto;
+                padding: 8px;
                 display: flex;
                 flex-direction: column;
-                min-height: 0;
-                min-width: 0;
-                overflow: hidden;
-            }
-
-            .panel-title {
-                text-align: center;
-                text-transform: uppercase;
-                letter-spacing: 2px;
-                font-size: var(--fs-title);
-                color: #c0a060;
-                padding: 2px 0;
-                border-bottom: 1px solid #c0a060;
-                background: #222;
-                flex-shrink: 0;
-            }
-
-            .panel-body {
-                padding: var(--gap);
-                flex: 1;
-                min-height: 0;
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-            }
-
-            .panel-body pre {
-                font-family: "Courier New", Courier, monospace;
-                font-size: var(--fs-pre);
-                line-height: 1.5;
-                white-space: pre;
-                color: #ddd;
-                flex-shrink: 0; /* natural height by default; panels scroll */
-            }
-
-            /* ── Column 1: Screen+Controls / Camera ───────────────────────── */
-
-            #panel-screen {
-                grid-column: 1;
-                grid-row: 1;
-            }
-            #panel-screen .panel-body {
-                padding: 0;
-                gap: 0;
-                align-items: center; /* centre canvas horizontally when height-constrained */
+                gap: 8px;
             }
 
             #screen {
-                display: block;
-                max-width: 100%;
-                max-height: 100%; /* shrink with the panel */
-                aspect-ratio: 160 / 144;
+                width: 480px;
+                height: 432px;
                 image-rendering: pixelated;
                 background: #000;
-                flex: 1;
-                min-height: 0; /* allow flex shrink */
-                object-fit: contain;
+                border: 1px solid var(--border);
             }
 
-            /* Controls toolbar — lives inside the screen panel */
-            #controls-bar {
+            #playback {
                 display: flex;
+                gap: 6px;
                 align-items: center;
-                gap: clamp(3px, 0.4vw, 8px);
                 flex-wrap: wrap;
-                padding: clamp(2px, 0.3vh, 6px) var(--gap);
-                border-top: 1px solid #c0a060;
-                background: #1e1e1e;
-                flex-shrink: 0;
-            }
-
-            .ctrl-btn {
-                background: #222;
-                color: #ddd;
-                border: 1px solid #c0a060;
-                padding: clamp(1px, 0.3vh, 4px) clamp(4px, 0.5vw, 10px);
-                font-family: inherit;
-                font-size: var(--fs-btn);
-                cursor: pointer;
-                text-transform: uppercase;
-                letter-spacing: 1px;
-                white-space: nowrap;
-            }
-
-            .ctrl-btn:hover {
-                background: #333;
-            }
-            .ctrl-btn:active,
-            .ctrl-btn.active {
-                background: #c0a060;
-                color: #111;
-            }
-
-            .ctrl-sep {
-                width: 1px;
-                align-self: stretch;
-                background: #444;
-            }
-
-            #speed-select {
-                background: #222;
-                color: #ddd;
-                border: 1px solid #c0a060;
-                font-family: inherit;
-                font-size: var(--fs-btn);
-                padding: 1px 2px;
             }
 
             #frame-info {
                 color: #888;
-                font-size: var(--fs-small);
-                font-variant-numeric: tabular-nums; /* fixed-width digits prevent layout shift */
-                text-align: center;
-                padding: 1px var(--gap);
-                background: #1a1a1a; /* explicit bg forces clean repaint */
-                flex-shrink: 0;
+                font-size: 11px;
+                margin-left: auto;
+            }
+
+            #panel-tiles canvas {
+                width: 100%;
+                max-width: 256px;
+                height: auto;
+                image-rendering: pixelated;
+                background: #000;
+                border: 1px solid var(--border);
+            }
+
+            /* Right column: Panels */
+            #col-right {
+                overflow: hidden;
+                padding: 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }
+
+            .panel {
+                background: var(--panel);
+                border: 1px solid var(--border);
+            }
+
+            .panel-head {
+                background: #222;
+                color: var(--gold);
+                padding: 4px 8px;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                border-bottom: 1px solid var(--border);
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+            }
+            .panel-head::after {
+                content: "[-]";
+                opacity: 0.5;
+            }
+            .panel.shut .panel-head::after {
+                content: "[+]";
+            }
+            .panel.shut .panel-body {
+                display: none;
+            }
+
+            .panel-body {
+                flex: 1 1 autho;
+                padding: 6px 8px;
+                overflow-y: auto;
+                max-height: none;
+            }
+
+            .panel-body pre {
+                margin: 0;
+                font: inherit;
+                white-space: pre;
+            }
+
+            /* Panels with more content get taller max-height */
+            #panel-disasm .panel-body,
+            #panel-memory .panel-body,
+            #panel-tiles .panel-body {
+                flex: 1 1 auto;
+            }
+
+            #panel-controls .panel-body,
+            #panel-cpu .panel-body,
+            #panel-ppu .panel-body {
+                max-height: none;
+                overflow: visible;
+            }
+
+            /* Register tables */
+            .reg-tbl {
+                display: table;
+                border-collapse: collapse;
+                width: 100%;
+            }
+            .reg-tbl .row {z
+                display: table-row;
+            }
+            .reg-tbl .row:nth-child(odd) {
+                background: #1f1f1f;
+            }
+            .reg-tbl span {
+                display: table-cell;
+                padding: 2px 6px;
+                border: 1px solid var(--border);
+            }
+            .reg-tbl .lbl {
+                color: #888;
+                text-align: right;
+                width: 1%;
                 white-space: nowrap;
             }
-
-            #panel-camera {
-                grid-column: 1;
-                grid-row: 2;
-            }
-            #panel-camera .panel-body {
-                gap: var(--gap);
-                overflow-y: auto;
+            .reg-tbl .val {
+                color: var(--gold);
+                text-align: left;
             }
 
-            #camera-status {
-                font-size: var(--fs-small);
-                color: #888;
-            }
-            .camera-row {
-                display: flex;
-                gap: var(--gap);
-                align-items: flex-start;
-            }
-            .camera-row > div {
-                flex: 1;
-                min-width: 0;
-            }
-
-            .camera-sub-label {
-                font-size: var(--fs-small);
-                color: #999;
-                margin-bottom: 2px;
-            }
-
-            #live-capture,
-            #webcam-preview {
-                display: block;
-                image-rendering: pixelated;
-                background: #000;
-                width: 100%;
-                aspect-ratio: 128 / 112;
-            }
-
-            #gallery-grid {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 3px;
-            }
-
-            #gallery-grid canvas {
-                display: block;
-                image-rendering: pixelated;
-                background: #000;
-            }
-
-            .gallery-slot {
-                text-align: center;
-                font-size: var(--fs-small);
-                color: #888;
-            }
-
-            .webcam-controls {
-                display: flex;
-                gap: 6px;
-                align-items: center;
-                margin-top: 2px;
-            }
-
-            .webcam-status-text {
-                font-size: var(--fs-small);
-                color: #888;
-            }
-
-            .gallery-section {
-                margin-top: 4px;
-            }
-
-            .cam-btn {
-                background: #222;
-                color: #ddd;
-                border: 1px solid #c0a060;
-                padding: clamp(1px, 0.3vh, 4px) clamp(4px, 0.5vw, 10px);
-                font-family: inherit;
-                font-size: var(--fs-btn);
-                cursor: pointer;
-            }
-            .cam-btn:hover {
-                background: #333;
-            }
-
-            /* ── Column 2: Disassembly (full height) ──────────────────────── */
-
-            #panel-disasm {
-                grid-column: 2;
-                grid-row: 1 / 3;
-            }
-            #panel-disasm .panel-body {
-                overflow-y: auto;
-            }
+            /* Disasm */
             #disasm-pre {
-                flex: 1;
-                min-height: 0;
+                max-height: 280px;
+                overflow-y: auto;
             }
-            #disasm-pre .current-pc {
+            #disasm-pre .pc {
                 background: #335;
                 color: #fff;
                 display: block;
             }
 
-            /* ── Column 3: Memory / Tiles ─────────────────────────────────── */
-
-            #panel-memory {
-                grid-column: 3;
-                grid-row: 1;
-            }
-            #panel-memory .panel-body {
-                overflow-y: auto;
-            }
-
-            #mem-controls {
+            /* Memory - larger */
+            #mem-nav {
                 display: flex;
-                align-items: center;
                 gap: 4px;
-                margin-bottom: 2px;
-                flex-shrink: 0;
-            }
-            #mem-controls label {
-                color: #999;
-                font-size: var(--fs-small);
-            }
-
-            #mem-addr-input {
-                background: #222;
-                color: #6cf;
-                border: 1px solid #c0a060;
-                font-family: inherit;
-                font-size: var(--fs-pre);
-                padding: 1px 4px;
-                width: 5ch;
-            }
-
-            .mem-goto-btn {
-                padding: 2px 8px;
-            }
-
-            #mem-pre {
-                flex: 1;
-                overflow-y: auto;
-            }
-
-            #panel-tiles {
-                grid-column: 3;
-                grid-row: 2;
-            }
-            .tiles-body {
+                margin-bottom: 6px;
                 align-items: center;
-                overflow-y: auto;
             }
-            #tile-canvas {
-                display: block;
-                image-rendering: pixelated;
-                width: 100%;
-                background: #000;
+            #mem-addr-input {
+                width: 6ch;
+                text-align: center;
             }
-
-            /* ── Column 4: CPU / PPU+IO ───────────────────────────────────── */
-
-            #panel-cpu {
-                grid-column: 4;
-                grid-row: 1;
-            }
-            #panel-cpu .panel-body {
-                overflow-y: auto;
-            }
-            #cpu-pre {
-                flex: 1;
-                min-height: 0;
+            #mem-pre {
+                font-size: 11px;
+                max-height: 320px;
+                overflow: auto;
+                line-height: 1.5;
             }
 
-            /* PPU + IO merged into one panel for row 2 */
-            #panel-ppu-io {
-                grid-column: 4;
-                grid-row: 2;
+            /* IO */
+            .sub {
+                color: var(--gold);
+                font-size: 10px;
+                margin: 8px 0 4px;
+                border-bottom: 1px solid var(--border);
             }
-            #panel-ppu-io .panel-body {
-                overflow-y: auto;
-                overflow-x: hidden;
-                gap: 2px;
-            }
-
-            .sub-heading {
-                color: #c0a060;
-                font-size: var(--fs-small);
-                text-transform: uppercase;
-                letter-spacing: 1px;
-                border-bottom: 1px solid #333;
-                padding-bottom: 1px;
-                margin-top: 4px;
-                flex-shrink: 0;
-            }
-            .sub-heading:first-child {
+            .sub:first-child {
                 margin-top: 0;
             }
 
-            /* Joypad visual */
-            .joypad-grid {
+            .joy {
                 display: inline-grid;
-                grid-template-columns:
-                    repeat(3, clamp(18px, 1.8vw, 30px))
-                    clamp(6px, 0.6vw, 12px) repeat(2, clamp(18px, 1.8vw, 30px));
-                grid-template-rows: repeat(3, clamp(18px, 1.8vw, 30px));
+                grid-template-columns: repeat(3, 22px) 12px repeat(2, 22px);
+                grid-template-rows: repeat(3, 22px);
                 gap: 2px;
-                margin-top: 2px;
-                flex-shrink: 0;
             }
-
-            .jp-btn {
-                text-align: center;
-                font-size: var(--fs-small);
-                color: #666;
-                border: 1px solid #444;
+            .joy span {
                 background: #222;
+                border: 1px solid var(--border);
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                font-size: 10px;
+                color: #666;
             }
-            .jp-btn.pressed {
-                color: #fff;
+            .joy span.on {
                 background: #6a4;
+                color: #fff;
                 border-color: #8c6;
             }
 
             #serial-output {
                 max-height: 50px;
                 overflow-y: auto;
-                font-size: var(--fs-small);
-                color: #aaa;
-                border-top: 1px solid #333;
-                margin-top: 2px;
-                padding-top: 2px;
+                color: #a80;
             }
 
-            /* ── Responsive ───────────────────────────────────────────────── */
-
-            /* Medium: drop memory+tiles columns */
-            @media (max-width: 1400px) {
-                .grid {
-                    grid-template-columns:
-                        minmax(280px, 1.4fr) minmax(180px, 1fr)
-                        minmax(180px, 0.85fr);
-                    grid-template-rows: 2fr 3fr;
-                }
-                #panel-screen {
-                    grid-column: 1;
-                    grid-row: 1;
-                }
-                #panel-camera {
-                    grid-column: 1;
-                    grid-row: 2;
-                }
-                #panel-disasm {
-                    grid-column: 2;
-                    grid-row: 1 / 3;
-                }
-                #panel-cpu {
-                    grid-column: 3;
-                    grid-row: 1;
-                }
-                #panel-ppu-io {
-                    grid-column: 3;
-                    grid-row: 2;
-                }
-                #panel-memory {
-                    display: none;
-                }
-                #panel-tiles {
-                    display: none;
-                }
+            /* Camera */
+            #panel-camera {
+                display: none;
+            }
+            .cam-row {
+                display: flex;
+                gap: 10px;
+                margin-bottom: 8px;
+            }
+            .cam-row > div {
+                flex: 1;
+            }
+            .cam-row small {
+                color: #888;
+                font-size: 10px;
+            }
+            .cam-row canvas {
+                width: 100%;
+                aspect-ratio: 128/112;
+                image-rendering: pixelated;
+                background: #000;
+                border: 1px solid var(--border);
+            }
+            #gallery-grid {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            .gallery-slot {
+                font-size: 10px;
+                color: #888;
+                text-align: center;
+            }
+            .gallery-slot canvas {
+                width: 64px;
+                height: 56px;
+                image-rendering: pixelated;
+                background: #000;
             }
 
-            /* Narrow: 2-column stack */
-            @media (max-width: 1000px) {
-                html,
-                body {
-                    overflow: auto;
-                }
-                .grid {
-                    grid-template-columns: 1fr 1fr;
-                    grid-template-rows: auto;
+            /* Gamepad */
+            #gamepad {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 4px 0;
+                user-select: none;
+                -webkit-user-select: none;
+                touch-action: manipulation;
+            }
+            .gp-dpad {
+                display: grid;
+                grid-template-columns: repeat(3, 44px);
+                grid-template-rows: repeat(3, 44px);
+                gap: 2px;
+            }
+            .gp-dpad .gp-btn:nth-child(1) {
+                grid-area: 1 / 2;
+            }
+            .gp-dpad .gp-btn:nth-child(2) {
+                grid-area: 2 / 1;
+            }
+            .gp-dpad .gp-btn:nth-child(3) {
+                grid-area: 3 / 2;
+            }
+            .gp-dpad .gp-btn:nth-child(4) {
+                grid-area: 2 / 3;
+            }
+            .gp-meta {
+                display: flex;
+                gap: 8px;
+            }
+            .gp-ab {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+            .gp-btn {
+                background: #222;
+                border: 2px solid var(--gold);
+                color: var(--gold);
+                font:
+                    bold 14px/1 "Courier New",
+                    monospace;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: background 0.05s;
+            }
+            .gp-btn:active,
+            .gp-btn.pressed {
+                background: var(--gold);
+                color: #000;
+            }
+            .gp-dpad .gp-btn {
+                width: 44px;
+                height: 44px;
+            }
+            .gp-round {
+                width: 52px;
+                height: 52px;
+                border-radius: 50%;
+            }
+            .gp-small {
+                width: 44px;
+                height: 28px;
+                font-size: 11px;
+            }
+
+            /* Mobile */
+            @media (max-width: 900px) {
+                #app {
+                    display: block;
                     height: auto;
                 }
-                #panel-screen {
-                    grid-column: 1;
-                    grid-row: 1;
+                #col-left {
+                    border-right: none;
+                    border-bottom: 1px solid var(--gold);
                 }
-                #panel-cpu {
-                    grid-column: 2;
-                    grid-row: 1;
+                #screen {
+                    width: 100%;
+                    height: auto;
+                    aspect-ratio: 160/144;
                 }
-                #panel-camera {
-                    grid-column: 1;
-                    grid-row: 2;
-                    display: flex;
+                #playback {
+                    justify-content: center;
                 }
-                #panel-ppu-io {
-                    grid-column: 2;
-                    grid-row: 2;
+                #frame-info {
+                    margin-left: 0;
+                    width: 100%;
+                    text-align: center;
                 }
-                #panel-disasm {
-                    grid-column: 1;
-                    grid-row: 3;
-                    min-height: 300px;
+                #gamepad {
+                    padding: 8px 0;
                 }
-                #panel-memory {
-                    grid-column: 2;
-                    grid-row: 3;
-                    min-height: 280px;
-                    display: flex;
+                .gp-dpad {
+                    grid-template-columns: repeat(3, 54px);
+                    grid-template-rows: repeat(3, 54px);
                 }
-                #panel-tiles {
-                    grid-column: 1 / 3;
-                    grid-row: 4;
-                    display: flex;
+                .gp-dpad .gp-btn {
+                    width: 54px;
+                    height: 54px;
                 }
-            }
-
-            /* Very narrow: 1-column */
-            @media (max-width: 700px) {
-                .grid {
-                    grid-template-columns: 1fr;
+                .gp-round {
+                    width: 64px;
+                    height: 64px;
+                    font-size: 18px;
                 }
-                .grid > .panel {
-                    grid-column: 1 !important;
-                    display: flex !important;
-                }
-                #panel-screen {
-                    grid-row: 1;
-                }
-                #panel-cpu {
-                    grid-row: 2;
-                }
-                #panel-disasm {
-                    grid-row: 3;
-                    min-height: 300px;
-                }
-                #panel-ppu-io {
-                    grid-row: 4;
-                }
-                #panel-camera {
-                    grid-row: 5;
-                }
-                #panel-memory {
-                    grid-row: 6;
-                    min-height: 280px;
-                }
-                #panel-tiles {
-                    grid-row: 7;
+                .gp-small {
+                    width: 50px;
+                    height: 32px;
                 }
             }
         </style>
     </head>
     <body>
-        <!-- Top bar: ROM + Save -->
-        <div id="top-bar">
-            <label class="ctrl-btn" for="rom-file">load rom</label>
-            <input type="file" id="rom-file" accept=".gb,.gbc,.bin,.rom" />
-            <span id="rom-name"><label>no rom loaded</label></span>
-            <div class="top-sep"></div>
-            <button class="ctrl-btn" id="download-save">download save</button>
-            <label class="ctrl-btn" for="load-save">load save</label>
-            <input type="file" id="load-save" accept=".sav" hidden />
-        </div>
+        <div id="app">
+            <header>
+                <label
+                    ><button
+                        onclick="document.getElementById('rom-file').click()"
+                    >
+                        Load ROM
+                    </button></label
+                >
+                <input type="file" id="rom-file" accept=".gb,.gbc" hidden />
+                <span id="rom-name">No ROM</span>
+                <button id="download-save">Download Save</button>
+                <label
+                    ><button
+                        onclick="document.getElementById('load-save').click()"
+                    >
+                        Load Save
+                    </button></label
+                >
+                <input type="file" id="load-save" accept=".sav" hidden />
+            </header>
 
-        <div class="grid">
-            <!-- Col 1 Row 1: Screen + Controls -->
-            <div class="panel" id="panel-screen">
-                <div class="panel-title">screen</div>
-                <div class="panel-body">
-                    <canvas id="screen" width="160" height="144"></canvas>
-                    <div id="controls-bar">
-                        <button class="ctrl-btn" id="btn-play" title="Space">
-                            &#9654; play
-                        </button>
-                        <button class="ctrl-btn" id="btn-pause" title="Space">
-                            &#9646;&#9646; pause
-                        </button>
-                        <button class="ctrl-btn" id="btn-step-frame" title="F">
-                            &#9654;| frame
-                        </button>
-                        <button class="ctrl-btn" id="btn-step-instr" title="N">
-                            &#8677; instr
-                        </button>
-                        <div class="ctrl-sep"></div>
-                        <select id="speed-select">
-                            <option value="0.25">0.25x</option>
-                            <option value="0.5">0.5x</option>
-                            <option value="1">1x</option>
-                            <option value="2">2x</option>
-                            <option value="4">4x</option>
-                            <option value="8">8x</option>
-                        </select>
-                    </div>
-                    <div id="frame-info"></div>
+            <div id="col-left">
+                <canvas id="screen" width="160" height="144"></canvas>
+                <div id="playback">
+                    <button id="btn-play">Play</button>
+                    <button id="btn-pause">Pause</button>
+                    <button id="btn-step-frame">Frame</button>
+                    <button id="btn-step-instr">Step</button>
+                    <select id="speed-select">
+                        <option value="0.5">0.5x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="2">2x</option>
+                        <option value="4">4x</option>
+                    </select>
+                    <span id="frame-info">Frame 0</span>
                 </div>
             </div>
 
-            <!-- Col 1 Row 3: Camera -->
-            <div class="panel" id="panel-camera">
-                <div class="panel-title">Camera</div>
-                <div class="panel-body">
-                    <div id="camera-status">No camera ROM loaded</div>
-                    <div class="camera-row">
-                        <div>
-                            <div class="camera-sub-label">LIVE CAPTURE</div>
-                            <canvas
-                                id="live-capture"
-                                width="128"
-                                height="112"
-                            ></canvas>
-                        </div>
-                        <div>
-                            <div class="camera-sub-label">WEBCAM FEED</div>
-                            <canvas
-                                id="webcam-preview"
-                                width="128"
-                                height="112"
-                            ></canvas>
+            <div id="col-right">
+                <div class="panel" id="panel-controls">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        Buttons
+                    </div>
+                    <div class="panel-body">
+                        <div id="gamepad">
+                            <div class="gp-dpad">
+                                <button class="gp-btn" data-btn="6"></button>
+                                <button class="gp-btn" data-btn="5"></button>
+                                <button class="gp-btn" data-btn="7"></button>
+                                <button class="gp-btn" data-btn="4"></button>
+                            </div>
+                            <div class="gp-meta">
+                                <button class="gp-btn gp-small" data-btn="2">
+                                    SEL
+                                </button>
+                                <button class="gp-btn gp-small" data-btn="3">
+                                    STA
+                                </button>
+                            </div>
+                            <div class="gp-ab">
+                                <button class="gp-btn gp-round" data-btn="1">
+                                    B
+                                </button>
+                                <button class="gp-btn gp-round" data-btn="0">
+                                    A
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    <div class="webcam-controls">
-                        <button class="cam-btn" id="btn-webcam-toggle">
-                            Enable Webcam
-                        </button>
-                        <span
-                            id="webcam-status"
-                            class="webcam-status-text"
-                        ></span>
+                </div>
+
+                <div class="panel" id="panel-cpu">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        CPU
                     </div>
-                    <div class="gallery-section">
-                        <div class="camera-sub-label">
-                            GALLERY (saved photos)
+                    <div class="panel-body">
+                        <div class="reg-tbl">
+                            <div class="row">
+                                <span class="lbl">AF</span
+                                ><span class="val" id="r-af">0000</span>
+                                <span class="lbl">BC</span
+                                ><span class="val" id="r-bc">0000</span>
+                                <span class="lbl">DE</span
+                                ><span class="val" id="r-de">0000</span>
+                                <span class="lbl">HL</span
+                                ><span class="val" id="r-hl">0000</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">SP</span
+                                ><span class="val" id="r-sp">0000</span>
+                                <span class="lbl">PC</span
+                                ><span class="val" id="r-pc">0000</span>
+                                <span class="lbl">IME</span
+                                ><span class="val" id="r-ime">0</span>
+                                <span class="lbl">HLT</span
+                                ><span class="val" id="r-halt">0</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">Flags</span
+                                ><span class="val" id="r-flags">----</span>
+                                <span class="lbl"></span
+                                ><span class="val"></span>
+                                <span class="lbl"></span
+                                ><span class="val"></span>
+                                <span class="lbl"></span
+                                ><span class="val"></span>
+                            </div>
                         </div>
+                    </div>
+                </div>
+
+                <div class="panel" id="panel-ppu">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        PPU
+                    </div>
+                    <div class="panel-body">
+                        <div class="reg-tbl">
+                            <div class="row">
+                                <span class="lbl">LY</span
+                                ><span class="val" id="r-ly">000</span>
+                                <span class="lbl">Mode</span
+                                ><span class="val" id="r-mode">0</span>
+                                <span class="lbl">LCDC</span
+                                ><span class="val" id="r-lcdc">00</span>
+                                <span class="lbl">STAT</span
+                                ><span class="val" id="r-stat">00</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">SCX</span
+                                ><span class="val" id="r-scx">00</span>
+                                <span class="lbl">SCY</span
+                                ><span class="val" id="r-scy">00</span>
+                                <span class="lbl">WX</span
+                                ><span class="val" id="r-wx">00</span>
+                                <span class="lbl">WY</span
+                                ><span class="val" id="r-wy">00</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">BGP</span
+                                ><span class="val" id="r-bgp">00</span>
+                                <span class="lbl">OBP0</span
+                                ><span class="val" id="r-obp0">00</span>
+                                <span class="lbl">OBP1</span
+                                ><span class="val" id="r-obp1">00</span>
+                                <span class="lbl"></span
+                                ><span class="val"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel" id="panel-disasm">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        Disassembly
+                    </div>
+                    <div class="panel-body"><pre id="disasm-pre"></pre></div>
+                </div>
+
+                <div class="panel" id="panel-memory">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        Memory
+                    </div>
+                    <div class="panel-body">
+                        <div id="mem-nav">
+                            <input
+                                type="text"
+                                id="mem-addr-input"
+                                value="0000"
+                                maxlength="4"
+                            />
+                            <button id="mem-goto">Go</button>
+                            <button id="mem-prev-page">&lt;&lt;</button>
+                            <button id="mem-prev">&lt;</button>
+                            <button id="mem-next">&gt;</button>
+                            <button id="mem-next-page">&gt;&gt;</button>
+                        </div>
+                        <pre id="mem-pre"></pre>
+                    </div>
+                </div>
+
+                <div class="panel shut" id="panel-tiles">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        Tiles
+                    </div>
+                    <div class="panel-body">
+                        <canvas
+                            id="tile-canvas"
+                            width="128"
+                            height="192"
+                        ></canvas>
+                    </div>
+                </div>
+
+                <div class="panel shut" id="panel-io">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        IO
+                    </div>
+                    <div class="panel-body">
+                        <div class="sub">Timer</div>
+                        <div class="reg-tbl">
+                            <div class="row">
+                                <span class="lbl">DIV</span
+                                ><span class="val" id="r-div">00</span>
+                                <span class="lbl">TIMA</span
+                                ><span class="val" id="r-tima">00</span>
+                                <span class="lbl">TMA</span
+                                ><span class="val" id="r-tma">00</span>
+                                <span class="lbl">TAC</span
+                                ><span class="val" id="r-tac">00</span>
+                            </div>
+                        </div>
+                        <div class="sub">Interrupts</div>
+                        <div class="reg-tbl">
+                            <div class="row">
+                                <span class="lbl">IE</span
+                                ><span class="val" id="r-ie">00</span>
+                                <span class="lbl">IF</span
+                                ><span class="val" id="r-if">00</span>
+                                <span class="lbl">VBL</span
+                                ><span class="val" id="r-int-vbl">-</span>
+                                <span class="lbl">LCD</span
+                                ><span class="val" id="r-int-lcd">-</span>
+                            </div>
+                            <div class="row">
+                                <span class="lbl">TIM</span
+                                ><span class="val" id="r-int-tim">-</span>
+                                <span class="lbl">SER</span
+                                ><span class="val" id="r-int-ser">-</span>
+                                <span class="lbl">JOY</span
+                                ><span class="val" id="r-int-joy">-</span>
+                                <span class="lbl"></span
+                                ><span class="val"></span>
+                            </div>
+                        </div>
+                        <div class="sub">Joypad</div>
+                        <div class="joy">
+                            <span></span><span id="jp-up">U</span><span></span
+                            ><span></span><span id="jp-a">A</span
+                            ><span id="jp-b">B</span> <span id="jp-left">L</span
+                            ><span></span><span id="jp-right">R</span
+                            ><span></span><span id="jp-select">Sel</span
+                            ><span id="jp-start">Sta</span> <span></span
+                            ><span id="jp-down">D</span><span></span
+                            ><span></span><span></span><span></span>
+                        </div>
+                        <div class="sub">Serial</div>
+                        <pre id="serial-output"></pre>
+                    </div>
+                </div>
+
+                <div class="panel" id="panel-camera">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        Camera
+                    </div>
+                    <div class="panel-body">
+                        <div id="camera-status"></div>
+                        <div class="cam-row">
+                            <div>
+                                <small>Sensor</small
+                                ><canvas
+                                    id="live-capture"
+                                    width="128"
+                                    height="112"
+                                ></canvas>
+                            </div>
+                            <div>
+                                <small>Webcam</small
+                                ><canvas
+                                    id="webcam-preview"
+                                    width="128"
+                                    height="112"
+                                ></canvas>
+                            </div>
+                        </div>
+                        <button id="btn-webcam-toggle">Enable Webcam</button>
+                        <span id="webcam-status"></span>
                         <div id="gallery-grid"></div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Col 2: Disassembly (full height) -->
-            <div class="panel" id="panel-disasm">
-                <div class="panel-title">Disassembly</div>
-                <div class="panel-body">
-                    <pre id="disasm-pre"></pre>
-                </div>
-            </div>
-
-            <!-- Col 3 Top: Memory -->
-            <div class="panel" id="panel-memory">
-                <div class="panel-title">Memory</div>
-                <div class="panel-body">
-                    <div id="mem-controls">
-                        <label>Addr:</label>
-                        <input
-                            type="text"
-                            id="mem-addr-input"
-                            value="0000"
-                            maxlength="4"
-                        />
-                        <button class="ctrl-btn mem-goto-btn" id="mem-goto">
-                            Go
-                        </button>
-                    </div>
-                    <pre id="mem-pre"></pre>
-                </div>
-            </div>
-
-            <!-- Col 3 Bottom: Tiles -->
-            <div class="panel" id="panel-tiles">
-                <div class="panel-title">Tiles</div>
-                <div class="panel-body tiles-body">
-                    <canvas id="tile-canvas" width="128" height="192"></canvas>
-                </div>
-            </div>
-
-            <!-- Col 4 Row 1: CPU -->
-            <div class="panel" id="panel-cpu">
-                <div class="panel-title">CPU Registers</div>
-                <div class="panel-body">
-                    <pre id="cpu-pre"></pre>
-                </div>
-            </div>
-
-            <!-- Col 4 Row 2: PPU + IO (merged) -->
-            <div class="panel" id="panel-ppu-io">
-                <div class="panel-title">PPU / IO</div>
-                <div class="panel-body">
-                    <div class="sub-heading">PPU</div>
-                    <pre id="ppu-pre"></pre>
-                    <div class="sub-heading">Timer</div>
-                    <pre id="timer-pre"></pre>
-                    <div class="sub-heading">Interrupts</div>
-                    <pre id="int-pre"></pre>
-                    <div class="sub-heading">Joypad</div>
-                    <div class="joypad-grid">
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn" id="jp-up">U</div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn" id="jp-a">A</div>
-                        <div class="jp-btn" id="jp-b">B</div>
-
-                        <div class="jp-btn" id="jp-left">L</div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn" id="jp-right">R</div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn" id="jp-select">Sel</div>
-                        <div class="jp-btn" id="jp-start">Sta</div>
-
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn" id="jp-down">D</div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn"></div>
-                        <div class="jp-btn"></div>
-                    </div>
-                    <div class="sub-heading">Serial</div>
-                    <pre id="serial-output"></pre>
                 </div>
             </div>
         </div>
