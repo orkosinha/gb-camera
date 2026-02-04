@@ -110,7 +110,7 @@
 
             /* Right column: Panels */
             #col-right {
-                overflow: hidden;
+                overflow-y: auto;
                 padding: 8px;
                 display: flex;
                 flex-direction: column;
@@ -174,30 +174,30 @@
 
             /* Register tables */
             .reg-tbl {
-                display: table;
-                border-collapse: collapse;
-                width: 100%;
+                display: grid;
+                grid-template-columns: repeat(4, auto 1fr);
+                border: 1px solid var(--border);
             }
-            .reg-tbl .row {z
-                display: table-row;
+            .reg-tbl .row {
+                display: contents;
             }
-            .reg-tbl .row:nth-child(odd) {
+            .reg-tbl .row:nth-child(odd) span {
                 background: #1f1f1f;
             }
             .reg-tbl span {
-                display: table-cell;
-                padding: 2px 6px;
+                padding: 3px 8px;
                 border: 1px solid var(--border);
+                margin: -1px 0 0 -1px;
             }
             .reg-tbl .lbl {
                 color: #888;
                 text-align: right;
-                width: 1%;
                 white-space: nowrap;
             }
             .reg-tbl .val {
                 color: var(--gold);
                 text-align: left;
+                font-family: "Courier New", monospace;
             }
 
             /* Disasm */
@@ -316,6 +316,8 @@
                 user-select: none;
                 -webkit-user-select: none;
                 touch-action: manipulation;
+                max-width: 400px;
+                margin: 0 auto;
             }
             .gp-dpad {
                 display: grid;
@@ -387,6 +389,10 @@
                     border-right: none;
                     border-bottom: 1px solid var(--gold);
                 }
+                #col-left,
+                #col-right {
+                    padding: 2vw;
+                }
                 #screen {
                     width: 100%;
                     height: auto;
@@ -401,24 +407,34 @@
                     text-align: center;
                 }
                 #gamepad {
-                    padding: 8px 0;
+                    padding: 2vw 0;
                 }
                 .gp-dpad {
-                    grid-template-columns: repeat(3, 54px);
-                    grid-template-rows: repeat(3, 54px);
+                    --btn-size: min(12vw, 54px);
+                    grid-template-columns: repeat(3, var(--btn-size));
+                    grid-template-rows: repeat(3, var(--btn-size));
+                    gap: 0.5vw;
                 }
                 .gp-dpad .gp-btn {
-                    width: 54px;
-                    height: 54px;
+                    width: var(--btn-size);
+                    height: var(--btn-size);
                 }
                 .gp-round {
-                    width: 64px;
-                    height: 64px;
-                    font-size: 18px;
+                    --round-size: min(14vw, 64px);
+                    width: var(--round-size);
+                    height: var(--round-size);
+                    font-size: min(4vw, 18px);
                 }
                 .gp-small {
-                    width: 50px;
-                    height: 32px;
+                    width: min(11vw, 50px);
+                    height: min(7vw, 32px);
+                    font-size: min(2.5vw, 11px);
+                }
+                .gp-meta {
+                    gap: 2vw;
+                }
+                .gp-ab {
+                    gap: 2vw;
                 }
             }
         </style>
