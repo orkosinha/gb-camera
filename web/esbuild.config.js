@@ -56,7 +56,7 @@ esbuild
     target: ["es2020"],
     minify: false,
     sourcemap: true,
-    external: ["../pkg/gb_emu.js"],
+    external: ["./pkg/gb_emu.js"],
   })
   .then(() => {
     console.log("Built debug-bundle.js");

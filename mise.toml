@@ -9,7 +9,7 @@ rust = "latest"
 [tasks."build:wasm"]
 description = "Build Rust code to WebAssembly"
 dir = "emu"
-run = "wasm-pack build --target web --out-dir ../web/pkg --features wasm --no-default-features"
+run = "wasm-pack build --target web --out-dir ../web/dist/pkg --features wasm --no-default-features"
 
 [tasks."build:js"]
 description = "Bundle JavaScript with esbuild"
@@ -96,7 +96,6 @@ run = "cargo fmt"
 [tasks.clean]
 description = "Remove build artifacts"
 run = """
-rm -rf web/pkg
 rm -rf web/dist
 rm -rf web/bundle.js
 rm -rf emu/target
@@ -106,7 +105,6 @@ rm -rf ios/gb-ios/RustLib/*.a
 [tasks."clean:all"]
 description = "Remove all build artifacts including iOS libs"
 run = """
-rm -rf web/pkg
 rm -rf web/dist
 rm -rf web/bundle.js
 rm -rf emu/target

@@ -1,6 +1,6 @@
 // ── Entry point ─────────────────────────────────────────────────────
 
-import init, { GameBoy } from "../pkg/gb_emu.js";
+import init, { GameBoy } from "./pkg/gb_emu.js";
 import { createRenderer } from "./renderer.js";
 import { createPanels } from "./panels.js";
 import { createInput } from "./input.js";
