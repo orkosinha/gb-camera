@@ -72,7 +72,7 @@ async function main() {
       camera.stopCamera();
     }
 
-    state.paused = true;
+    state.paused = false;
     state.frameCounter = 0;
     renderer.renderScreen();
     updateAll();
