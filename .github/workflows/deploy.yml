@@ -36,7 +36,7 @@ jobs:
         run: npm install
 
       - name: Build web project
-        run: mise run build:web
+        run: mise run build:debug
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
