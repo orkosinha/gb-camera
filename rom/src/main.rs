@@ -7,8 +7,9 @@
 //! Format: 128x112 pixels as 2bpp tiles (16x14 tiles, 3584 bytes).
 
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
+use std::path::Path;
 
 const ROM_SIZE: usize = 32768; // 32KB minimum
 
@@ -183,6 +184,7 @@ struct CameraConfig {
     edge_enhance: u8,   // 0-7
     voltage_offset: u8, // 0-255
     invert: bool,
+    release: bool,
 }
 
 impl Default for CameraConfig {
@@ -196,6 +198,7 @@ impl Default for CameraConfig {
             edge_enhance: 0,      // No edge enhancement
             voltage_offset: 0x80, // Middle offset
             invert: false,
+            release: false,
         }
     }
 }
@@ -301,6 +304,26 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         rom[offset..offset + 48].copy_from_slice(&matrix);
     }
 
+    // Font data at 0x0600: 7 characters for "gb-film", 16 bytes each (2bpp)
+    // 1bpp masks (1 = white pixel on black background)
+    let font_masks: [[u8; 8]; 7] = [
+        [0x00, 0x70, 0x88, 0x88, 0x78, 0x08, 0x88, 0x70], // g
+        [0x80, 0x80, 0xF0, 0x88, 0x88, 0x88, 0xF0, 0x00], // b
+        [0x00, 0x00, 0x00, 0x00, 0xF8, 0x00, 0x00, 0x00], // -
+        [0x30, 0x40, 0xF0, 0x40, 0x40, 0x40, 0x40, 0x00], // f
+        [0x40, 0x00, 0x40, 0x40, 0x40, 0x40, 0x40, 0x00], // i
+        [0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x30, 0x00], // l
+        [0x00, 0x00, 0x6C, 0x92, 0x92, 0x92, 0x92, 0x00], // m
+    ];
+    for (i, masks) in font_masks.iter().enumerate() {
+        let offset = 0x0600 + i * 16;
+        for (row, &mask) in masks.iter().enumerate() {
+            let inv = !mask;
+            rom[offset + row * 2] = inv; // low bitplane
+            rom[offset + row * 2 + 1] = inv; // high bitplane
+        }
+    }
+
     // Build A001 register value: N (bit 1), VH (bit 0), Gain (bits 4-5)
     let reg_a001 = (config.gain & 0x03) << 4 | if config.invert { 0x00 } else { 0x02 };
 
@@ -319,8 +342,10 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
     //   Down:  decrease brightness (exposure -= 0x0400)
     //   Right: increase contrast (+1, max 15)
     //   Left:  decrease contrast (-1, min 0)
-    let code: Vec<u8> = vec![
-        // === INIT (0x0150) ===
+    let mut code: Vec<u8> = Vec::new();
+
+    // === INIT (0x0150) ===
+    code.extend_from_slice(&[
         // Enable SRAM
         0x3E,
         0x0A, // ld a, $0A
@@ -342,7 +367,108 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         config.contrast, // ld a, contrast
         0xE0,
         0x82, // ldh [$FF82], a
-        // === CAPTURE_LOOP (0x0161) ===
+    ]);
+
+    // === LCD INIT ===
+    code.extend_from_slice(&[
+        // BGP palette: standard grayscale mapping
+        0x3E, 0xE4, // ld a, $E4
+        0xE0, 0x47, // ldh [$FF47], a
+        // Scroll registers: SCY=0, SCX=0
+        0xAF, // xor a
+        0xE0, 0x42, // ldh [$FF42], a
+        0xE0, 0x43, // ldh [$FF43], a
+    ]);
+
+    // Fill all VRAM tile data ($8000-$8FFF) with $FF so everything starts black
+    code.extend_from_slice(&[
+        0x21, 0x00, 0x80, // ld hl, $8000
+        0x01, 0x00, 0x10, // ld bc, $1000 (4096 bytes = 256 tiles)
+        // fill_vram_loop:
+        0x3E, 0xFF, // ld a, $FF
+        0x22, // ld [hl+], a
+        0x0B, // dec bc
+        0x78, // ld a, b
+        0xB1, // or c
+        0x20, 0xF8, // jr nz, fill_vram_loop (-8)
+    ]);
+
+    // Fill tile map at $9800 with tile index $E0 (border tile, all black)
+    code.extend_from_slice(&[
+        0x21, 0x00, 0x98, // ld hl, $9800
+        0x01, 0x00, 0x04, // ld bc, $0400 (1024 bytes)
+        // fill_map_loop:
+        0x3E, 0xE0, // ld a, $E0
+        0x22, // ld [hl+], a
+        0x0B, // dec bc
+        0x78, // ld a, b
+        0xB1, // or c
+        0x20, 0xF8, // jr nz, fill_map_loop (-8)
+    ]);
+
+    // Copy font tile data from ROM $0600 to VRAM $8E10 (tiles 225-231, 112 bytes)
+    code.extend_from_slice(&[
+        0x21, 0x00, 0x06, // ld hl, $0600 (ROM source)
+        0x11, 0x10, 0x8E, // ld de, $8E10 (VRAM dest, tile 225)
+        0x06, 0x70, // ld b, 112
+        // font_copy_loop:
+        0x2A, // ld a, [hl+]
+        0x12, // ld [de], a
+        0x13, // inc de
+        0x05, // dec b
+        0x20, 0xFA, // jr nz, font_copy_loop (-6)
+    ]);
+
+    // Write camera tile indices (0-223) into 16x14 region of 32-wide tile map
+    // Centered: start at row 2, col 2 = $9800 + 2*32 + 2 = $9842
+    // Use HRAM $FF83 for tile index, B = row counter, C = column counter
+    code.extend_from_slice(&[
+        0x21, 0x42, 0x98, // ld hl, $9842
+        0xAF, // xor a (tile index = 0)
+        0xE0, 0x83, // ldh [$FF83], a
+        0x06, 0x0E, // ld b, 14 (row count)
+        // row_loop:
+        0xC5, // push bc
+        0x0E, 0x10, // ld c, 16 (column count)
+        // col_loop:
+        0xF0, 0x83, // ldh a, [$FF83]
+        0x22, // ld [hl+], a
+        0x3C, // inc a
+        0xE0, 0x83, // ldh [$FF83], a
+        0x0D, // dec c
+        0x20, 0xF7, // jr nz, col_loop (-9)
+        // Advance HL by 16 to skip unused columns in 32-wide map
+        0x11, 0x10, 0x00, // ld de, $0010
+        0x19, // add hl, de
+        0xC1, // pop bc
+        0x05, // dec b
+        0x20, 0xEC, // jr nz, row_loop (-20)
+    ]);
+
+    // Write "gb-film" tile indices at row 17, col 7 (centered in bottom border)
+    // Row 17, col 7 = $9800 + 17*32 + 7 = $9A27
+    code.extend_from_slice(&[
+        0x21, 0x27, 0x9A, // ld hl, $9A27
+        0x3E, 0xE1, // ld a, $E1 (first font tile)
+        0x06, 0x07, // ld b, 7
+        // text_loop:
+        0x22, // ld [hl+], a
+        0x3C, // inc a
+        0x05, // dec b
+        0x20, 0xFB, // jr nz, text_loop (-5)
+    ]);
+
+    // Enable LCD: BG on, tile data at $8000, map at $9800
+    code.extend_from_slice(&[
+        0x3E, 0x91, // ld a, $91
+        0xE0, 0x40, // ldh [$FF40], a
+    ]);
+
+    // Compute CAPTURE_LOOP address
+    let capture_loop_addr = 0x0150 + code.len() as u16;
+
+    // === CAPTURE_LOOP ===
+    code.extend_from_slice(&[
         // Read joypad: select D-PAD (P14=0, P15=1)
         0x3E,
         0x20, // ld a, $20
@@ -475,13 +601,13 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0xA0, // ld de, $A006
         0x06,
         0x30, // ld b, 48
-        // copy_loop:
+        // dither_copy_loop:
         0x2A, // ld a, [hl+]
         0x12, // ld [de], a
         0x13, // inc de
         0x05, // dec b
         0x20,
-        0xFA, // jr nz, copy_loop (-6)
+        0xFA, // jr nz, dither_copy_loop (-6)
         // === Trigger capture ===
         0x3E,
         0x01, // ld a, $01
@@ -502,21 +628,30 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0xEA,
         0x00,
         0x40, // ld [$4000], a
-        // === Small delay before next capture ===
+        // === Copy SRAM image to VRAM for LCD display ===
+        0x21,
+        0x00,
+        0xA1, // ld hl, $A100 (SRAM source)
+        0x11,
+        0x00,
+        0x80, // ld de, $8000 (VRAM destination)
         0x01,
         0x00,
-        0x10, // ld bc, $1000
-        // delay_loop:
+        0x0E, // ld bc, $0E00 (3584 bytes = 224 tiles x 16)
+        // vram_copy_loop:
+        0x2A, // ld a, [hl+]
+        0x12, // ld [de], a
+        0x13, // inc de
         0x0B, // dec bc
         0x78, // ld a, b
         0xB1, // or c
         0x20,
-        0xFB, // jr nz, delay_loop (-5)
-        // === Loop back to CAPTURE_LOOP (0x0161) ===
+        0xF8, // jr nz, vram_copy_loop (-8)
+        // === Loop back to CAPTURE_LOOP ===
         0xC3,
-        0x61,
-        0x01, // jp $0161
-    ];
+        (capture_loop_addr & 0xFF) as u8,
+        (capture_loop_addr >> 8) as u8,
+    ]);
 
     rom[0x150..0x150 + code.len()].copy_from_slice(&code);
 
@@ -537,6 +672,7 @@ fn print_usage() {
     println!("  --edge <0-7>        Edge enhancement (default: 0)");
     println!("  --offset <0-255>    Voltage offset (default: 128)");
     println!("  --invert            Invert output");
+    println!("  --release           For release");
     println!("  --help              Show this help");
 }
 
@@ -609,6 +745,9 @@ fn main() -> std::io::Result<()> {
             "--invert" => {
                 config.invert = true;
             }
+            "--release" => {
+                config.release = true;
+            }
             _ => {
                 eprintln!("Unknown option: {}", args[i]);
                 print_usage();
@@ -620,7 +759,14 @@ fn main() -> std::io::Result<()> {
 
     let rom = build_rom(&config);
 
-    let output_path = "rom.gb";
+    let output_path = if config.release {
+        "../web/dist/pkg/film.gb"
+    } else {
+        "rom.gb"
+    };
+    if let Some(parent) = Path::new(output_path).parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut file = File::create(output_path)?;
     file.write_all(&rom)?;
 
@@ -638,8 +784,76 @@ fn main() -> std::io::Result<()> {
     println!("  2. Configures camera registers at A001-A035");
     println!("  3. Triggers capture by writing 0x01 to A000");
     println!("  4. Polls A000 until bit 0 clears");
-    println!("  5. Captured image at SRAM 0xA100 (3584 bytes, 2bpp tiles)");
+    println!("  5. Copies image from SRAM to VRAM for LCD display");
     println!("  6. Repeats continuously");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rom_code_size_within_bounds() {
+        let config = CameraConfig::default();
+        let rom = build_rom(&config);
+
+        // Find last non-zero byte in code region (0x0150 to 0x02FF)
+        let mut last_code_addr = 0x0150;
+        for i in 0x0150..0x0300 {
+            if rom[i] != 0 {
+                last_code_addr = i;
+            }
+        }
+
+        let code_size = last_code_addr - 0x0150 + 1;
+        let space_before_dither = 0x0300 - last_code_addr - 1;
+
+        // Code must not overlap dither data at 0x0300
+        assert!(
+            last_code_addr < 0x0300,
+            "Code extends past 0x02FF into dither data region! Last byte at 0x{:04X}",
+            last_code_addr
+        );
+
+        // Verify dither data is intact at 0x0300
+        assert_ne!(rom[0x0300], 0, "Dither data at 0x0300 should be non-zero");
+
+        // Verify font data at 0x0600 doesn't overlap dither data (ends at 0x05FF)
+        assert_eq!(
+            rom[0x0600], 0xFF,
+            "Font data at 0x0600 should start with 0xFF"
+        );
+
+        println!(
+            "Code size: {} bytes (0x0150-0x{:04X}), {} bytes spare before dither data",
+            code_size, last_code_addr, space_before_dither
+        );
+    }
+
+    #[test]
+    fn test_rom_header_valid() {
+        let config = CameraConfig::default();
+        let rom = build_rom(&config);
+
+        // Check entry point
+        assert_eq!(rom[0x100], 0x00, "Expected NOP at entry point");
+        assert_eq!(rom[0x101], 0xC3, "Expected JP at entry point");
+
+        // Check Nintendo logo present
+        assert_eq!(rom[0x104], 0xCE, "Nintendo logo should start at 0x104");
+
+        // Check cartridge type (Pocket Camera)
+        assert_eq!(
+            rom[0x147], 0xFC,
+            "Cartridge type should be 0xFC (Pocket Camera)"
+        );
+
+        // Verify header checksum
+        let checksum: u8 = rom[0x134..=0x14C]
+            .iter()
+            .fold(0u8, |acc, &b| acc.wrapping_sub(b).wrapping_sub(1));
+        assert_eq!(rom[0x14D], checksum, "Header checksum mismatch");
+    }
 }
