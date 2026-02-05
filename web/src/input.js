@@ -17,16 +17,29 @@ export function createInput(state, buttonState) {
     // Track active touches per button
     const activeTouches = new Map();
 
-    function pressButton(btn) {
+    // Get gamepad button element by button index
+    function getButtonElement(btn) {
+        return document.querySelector(`.gp-btn[data-btn="${btn}"]`);
+    }
+
+    function pressButton(btn, fromKeyboard = false) {
         if (!state.emulator || state.paused) return;
         state.emulator.set_button(btn, true);
         buttonState[NAMES[btn]] = true;
+        if (fromKeyboard) {
+            const el = getButtonElement(btn);
+            if (el) el.classList.add('pressed');
+        }
     }
 
-    function releaseButton(btn) {
+    function releaseButton(btn, fromKeyboard = false) {
         if (!state.emulator) return;
         state.emulator.set_button(btn, false);
         buttonState[NAMES[btn]] = false;
+        if (fromKeyboard) {
+            const el = getButtonElement(btn);
+            if (el) el.classList.remove('pressed');
+        }
     }
 
     // Keyboard handlers
@@ -50,14 +63,14 @@ export function createInput(state, buttonState) {
         const btn = BUTTONS[e.key];
         if (btn !== undefined) {
             e.preventDefault();
-            pressButton(btn);
+            pressButton(btn, true);
         }
     }
 
     function onKeyUp(e) {
         const btn = BUTTONS[e.key];
         if (btn !== undefined) {
-            releaseButton(btn);
+            releaseButton(btn, true);
         }
     }
 

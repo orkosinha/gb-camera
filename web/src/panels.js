@@ -109,16 +109,6 @@ export function createPanels(state, dom) {
         }
     }
 
-    function updateJoypad() {
-        const map = {
-            up: 'jp-up', down: 'jp-down', left: 'jp-left', right: 'jp-right',
-            a: 'jp-a', b: 'jp-b', select: 'jp-select', start: 'jp-start'
-        };
-        for (const [key, id] of Object.entries(map)) {
-            $(id)?.classList.toggle('on', buttonState[key]);
-        }
-    }
-
     function updateSerial() {
         const text = state.emulator.get_serial_output();
         if (text) dom.serialPre.textContent = text;
@@ -131,7 +121,6 @@ export function createPanels(state, dom) {
         updateMemory();
         updateTimer();
         updateInterrupts();
-        updateJoypad();
         updateSerial();
     }
 

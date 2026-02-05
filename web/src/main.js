@@ -47,17 +47,22 @@ async function main() {
   });
   const save = createSave(state);
 
-  // ROM loading
-  $("rom-file").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // Load ROM helper
+  async function loadRom(data, name) {
+    // Stop camera before loading new ROM (clean up intervals, etc.)
+    camera.stopCamera();
 
-    const data = new Uint8Array(await file.arrayBuffer());
+    // Create fresh emulator instance
     state.emulator = new GameBoy();
     state.emulator.load_rom(data);
 
-    $("rom-name").textContent = file.name;
-    state.currentRomName = file.name.replace(/\.(gb|gbc|bin|rom)$/i, "");
+    $("rom-name").textContent = name;
+    state.currentRomName = name.replace(/\.(gb|gbc|bin|rom)$/i, "");
+
+    // Reset emulator state
+    state.paused = true;
+    state.frameCounter = 0;
+    state.panelUpdateCounter = 0;
 
     const cartType = data.length >= 0x148 ? data[0x147] : 0;
     state.isGameBoyCamera = cartType === 0xfc;
@@ -69,14 +74,32 @@ async function main() {
       if (camera.isWebcamEnabled()) camera.captureFrame();
     } else {
       cameraPanel.style.display = "none";
-      camera.stopCamera();
     }
 
-    state.paused = false;
-    state.frameCounter = 0;
     renderer.renderScreen();
     updateAll();
     renderer.renderTiles();
+  }
+
+  // Load default ROM (film.gb)
+  try {
+    const resp = await fetch("./pkg/film.gb");
+    if (resp.ok) {
+      const data = new Uint8Array(await resp.arrayBuffer());
+      await loadRom(data, "film.gb");
+      state.paused = false; // Auto-play the default ROM
+    }
+  } catch (e) {
+    console.log("Default ROM not available:", e);
+  }
+
+  // ROM loading from file picker
+  $("rom-file").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const data = new Uint8Array(await file.arrayBuffer());
+    await loadRom(data, file.name);
   });
 
   // GB Buttons

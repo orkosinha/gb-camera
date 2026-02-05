@@ -240,27 +240,6 @@
                 margin-top: 0;
             }
 
-            .joy {
-                display: inline-grid;
-                grid-template-columns: repeat(3, 22px) 12px repeat(2, 22px);
-                grid-template-rows: repeat(3, 22px);
-                gap: 2px;
-            }
-            .joy span {
-                background: #222;
-                border: 1px solid var(--border);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 10px;
-                color: #666;
-            }
-            .joy span.on {
-                background: #6a4;
-                color: #fff;
-                border-color: #8c6;
-            }
-
             #serial-output {
                 max-height: 50px;
                 overflow-y: auto;
@@ -696,17 +675,6 @@
                                 <span class="lbl"></span
                                 ><span class="val"></span>
                             </div>
-                        </div>
-                        <div class="sub">Joypad</div>
-                        <div class="joy">
-                            <span></span><span id="jp-up">U</span><span></span
-                            ><span></span><span id="jp-a">A</span
-                            ><span id="jp-b">B</span> <span id="jp-left">L</span
-                            ><span></span><span id="jp-right">R</span
-                            ><span></span><span id="jp-select">Sel</span
-                            ><span id="jp-start">Sta</span> <span></span
-                            ><span id="jp-down">D</span><span></span
-                            ><span></span><span></span><span></span>
                         </div>
                         <div class="sub">Serial</div>
                         <pre id="serial-output"></pre>

@@ -6,24 +6,26 @@ rust = "latest"
 # Web Build Tasks
 # =============================================================================
 
-[tasks."build:wasm"]
+[tasks."build:emu:wasm"]
 description = "Build Rust code to WebAssembly"
 dir = "emu"
 run = "wasm-pack build --target web --out-dir ../web/dist/pkg --features wasm --no-default-features"
 
-[tasks."build:js"]
-description = "Bundle JavaScript with esbuild"
+[tasks."build:rom"]
+description = "Build ROM for WASM to run"
+dir = "rom"
+depends_post = ["build:emu:wasm"]
+run = "cargo run -- --release"
+
+[tasks."build:debug"]
+description = "Bundle the full debug js project"
 dir = "web"
 run = "node esbuild.config.js"
-depends = ["build:wasm"]
-
-[tasks."build:web"]
-description = "Build the full web project (WASM + JS)"
-depends = ["build:js"]
+depends = ["build:emu:wasm", "build:rom"]
 
 [tasks.dev]
 description = "Build and serve the web project"
-depends = ["build:web"]
+depends = ["build:debug"]
 dir = "web/dist"
 run = "npx serve ."
 
@@ -33,11 +35,11 @@ run = "npx serve ."
 
 [tasks.build]
 description = "Build all targets (web)"
-depends = ["build:web"]
+depends = ["build:debug"]
 
 [tasks."build:all"]
 description = "Build all targets (web + iOS)"
-depends = ["build:web", "build:ios"]
+depends = ["build:debug", "build:ios"]
 
 # =============================================================================
 # Testing & Development
@@ -92,13 +94,7 @@ depends = ["fmt:emu", "fmt:rom"]
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = """
-rm -rf web/dist
-rm -rf emu/target
-rm -rf rom/target
-rm rom/rom.gb
-rm -rf ios/gb-ios/RustLib/*.a
-"""
+run = "./scripts/clean.sh"
 
 # =============================================================================
 # iOS Build Tasks
@@ -112,12 +108,12 @@ run = "./scripts/build-ios.sh release"
 description = "Build Rust static library for iOS (debug mode)"
 run = "./scripts/build-ios.sh debug"
 
-[tasks."build:ios:device"]
+[tasks."build:emu:ios"]
 description = "Build Rust static library for iOS device only"
 dir = "emu"
 run = "cargo build --target aarch64-apple-ios --features ios --no-default-features --release"
 
-[tasks."build:ios:sim"]
+[tasks."build:emu:ios-sim"]
 description = "Build Rust static library for iOS simulator only"
 dir = "emu"
 run = "cargo build --target aarch64-apple-ios-sim --features ios --no-default-features --release"
