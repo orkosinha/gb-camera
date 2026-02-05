@@ -28,6 +28,79 @@ dir = "web/dist"
 run = "npx serve ."
 
 # =============================================================================
+# Combined Build Tasks
+# =============================================================================
+
+[tasks.build]
+description = "Build all targets (web)"
+depends = ["build:web"]
+
+[tasks."build:all"]
+description = "Build all targets (web + iOS)"
+depends = ["build:web", "build:ios"]
+
+# =============================================================================
+# Testing & Development
+# =============================================================================
+
+[tasks."test:emu"]
+description = "Run all tests for emu"
+dir = "emu"
+run = "cargo test"
+
+[tasks."test:rom"]
+description = "Run all tests for rom"
+dir = "rom"
+run = "cargo test"
+
+[tasks.test]
+description = "Run all tests"
+depends = ["test:emu", "test:rom"]
+
+[tasks."check:emu"]
+description = "Run cargo check and clippy for emu"
+dir = "emu"
+run = "cargo check && cargo clippy -- -D warnings"
+
+[tasks."check:rom"]
+description = "Run cargo check and clippy for rom"
+dir = "rom"
+run = "cargo check && cargo clippy -- -D warnings"
+
+[tasks.check]
+description = "Run cargo check and clippy"
+dir = "emu"
+run = "cargo check && cargo clippy -- -D warnings"
+
+[tasks."fmt:emu"]
+description = "Format code"
+dir = "emu"
+run = "cargo fmt"
+
+[tasks."fmt:rom"]
+description = "Format code"
+dir = "rom"
+run = "cargo fmt"
+
+[tasks.fmt]
+description = "Format code"
+depends = ["fmt:emu", "fmt:rom"]
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = """
+rm -rf web/dist
+rm -rf emu/target
+rm -rf rom/target
+rm rom/rom.gb
+rm -rf ios/gb-ios/RustLib/*.a
+"""
+
+# =============================================================================
 # iOS Build Tasks
 # =============================================================================
 
@@ -52,61 +125,3 @@ run = "cargo build --target aarch64-apple-ios-sim --features ios --no-default-fe
 [tasks."xcode:open"]
 description = "Open iOS project in Xcode"
 run = "open ios/gb-ios.xcodeproj"
-
-# =============================================================================
-# Combined Build Tasks
-# =============================================================================
-
-[tasks.build]
-description = "Build all targets (web)"
-depends = ["build:web"]
-
-[tasks."build:all"]
-description = "Build all targets (web + iOS)"
-depends = ["build:web", "build:ios"]
-
-# =============================================================================
-# Testing & Development
-# =============================================================================
-
-[tasks.test]
-description = "Run all tests"
-dir = "emu"
-run = "cargo test"
-
-[tasks."test:watch"]
-description = "Run tests in watch mode"
-dir = "emu"
-run = "cargo watch -x test"
-
-[tasks.check]
-description = "Run cargo check and clippy"
-dir = "emu"
-run = "cargo check && cargo clippy -- -D warnings"
-
-[tasks.fmt]
-description = "Format code"
-dir = "emu"
-run = "cargo fmt"
-
-# =============================================================================
-# Cleanup
-# =============================================================================
-
-[tasks.clean]
-description = "Remove build artifacts"
-run = """
-rm -rf web/dist
-rm -rf web/bundle.js
-rm -rf emu/target
-rm -rf ios/gb-ios/RustLib/*.a
-"""
-
-[tasks."clean:all"]
-description = "Remove all build artifacts including iOS libs"
-run = """
-rm -rf web/dist
-rm -rf web/bundle.js
-rm -rf emu/target
-rm -rf ios/gb-ios/RustLib/*.a
-"""
