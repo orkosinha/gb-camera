@@ -29,6 +29,9 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
+# Rom
+rom.gb
+
 # Backup files
 *.bkp
 *.backup
