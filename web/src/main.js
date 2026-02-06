@@ -39,6 +39,7 @@ async function main() {
   const input = createInput(state, buttonState);
   const camera = createCamera(state, {
     cameraStatus: $("camera-status"),
+    cameraSettings: $("camera-settings"),
     liveCapture: $("live-capture"),
     webcamPreview: $("webcam-preview"),
     webcamStatus: $("webcam-status"),
@@ -174,14 +175,17 @@ async function main() {
   input.attach();
 
   // Frame loop
+  let cameraTickCounter = 0;
   function tick() {
     if (state.emulator) {
       if (!state.paused) {
+        // Capture webcam every 4 ticks (independent of speed)
         if (
           state.isGameBoyCamera &&
           camera.isWebcamEnabled() &&
-          state.frameCounter % 4 === 0
+          ++cameraTickCounter >= 4
         ) {
+          cameraTickCounter = 0;
           camera.captureFrame();
         }
         for (let i = 0; i < state.speed; i++) state.emulator.step_frame();

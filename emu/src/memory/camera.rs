@@ -121,13 +121,14 @@ impl Memory {
             self.camera_image_ready
         );
 
-        // Calculate brightness multiplier from exposure (default ~0x1000 is "normal")
-        // Exposure range is typically 0x0010 to 0xFFFF
-        let exposure_factor = if exposure > 0 {
+        // Smooth exposure adjustment
+        let target_factor = if exposure > 0 {
             (exposure as f32) / 4096.0
         } else {
-            1.0
+            0.0
         };
+        let exposure_factor = self.camera_exposure_smooth * 0.5 + target_factor * 0.5;
+        self.camera_exposure_smooth = exposure_factor;
 
         // Calculate contrast multiplier from gain (higher gain = more contrast)
         let gain_factor = match gain_bits {
@@ -365,6 +366,79 @@ impl Memory {
         }
 
         rgba
+    }
+
+    /// Derive the contrast level (0-15) from the current dither matrix in camera registers.
+    /// Returns 0-15 if matched against known gb-photo threshold tables, or -1 if unknown.
+    ///
+    /// The dither matrix (regs A006-A035) encodes 16 positions × 3 thresholds each.
+    /// For any dither pattern, the minimum of each threshold channel across all 16
+    /// positions equals the base threshold for that channel. We match [t0, t1, t2]
+    /// against the standard high-light and low-light tables.
+    pub fn camera_contrast(&self) -> i32 {
+        // High-light dither thresholds (16 contrast levels × 4 thresholds)
+        const HIGH_LIGHT: [[u8; 4]; 16] = [
+            [0x80, 0x8F, 0xD0, 0xE6],
+            [0x82, 0x90, 0xC8, 0xE3],
+            [0x84, 0x90, 0xC0, 0xE0],
+            [0x85, 0x91, 0xB8, 0xDD],
+            [0x86, 0x91, 0xB1, 0xDB],
+            [0x87, 0x92, 0xAA, 0xD8],
+            [0x88, 0x92, 0xA5, 0xD5],
+            [0x89, 0x92, 0xA2, 0xD2],
+            [0x8A, 0x92, 0xA1, 0xC8],
+            [0x8B, 0x92, 0xA0, 0xBE],
+            [0x8C, 0x92, 0x9E, 0xB4],
+            [0x8D, 0x92, 0x9C, 0xAC],
+            [0x8E, 0x92, 0x9B, 0xA5],
+            [0x8F, 0x92, 0x99, 0xA0],
+            [0x90, 0x92, 0x97, 0x9A],
+            [0x92, 0x92, 0x92, 0x92],
+        ];
+        // Low-light dither thresholds
+        const LOW_LIGHT: [[u8; 4]; 16] = [
+            [0x80, 0x94, 0xDC, 0xFF],
+            [0x82, 0x95, 0xD2, 0xFF],
+            [0x84, 0x96, 0xCA, 0xFF],
+            [0x86, 0x96, 0xC4, 0xFF],
+            [0x88, 0x97, 0xBE, 0xFF],
+            [0x8A, 0x97, 0xB8, 0xFF],
+            [0x8B, 0x98, 0xB2, 0xF5],
+            [0x8C, 0x98, 0xAC, 0xEB],
+            [0x8D, 0x98, 0xAA, 0xDD],
+            [0x8E, 0x98, 0xA8, 0xD0],
+            [0x8F, 0x98, 0xA6, 0xC4],
+            [0x90, 0x98, 0xA4, 0xBA],
+            [0x92, 0x98, 0xA1, 0xB2],
+            [0x94, 0x98, 0x9D, 0xA8],
+            [0x96, 0x98, 0x99, 0xA0],
+            [0x98, 0x98, 0x98, 0x98],
+        ];
+
+        // Extract minimum of each threshold channel across all 16 dither positions.
+        // This yields the base thresholds [t0, t1, t2].
+        let mut t = [0xFFu8; 3];
+        for pos in 0..16 {
+            for ch in 0..3 {
+                let val = self.camera_regs[0x06 + pos * 3 + ch];
+                if val < t[ch] {
+                    t[ch] = val;
+                }
+            }
+        }
+
+        // Match against known tables (check first 3 of 4 thresholds)
+        for (level, row) in LOW_LIGHT.iter().enumerate() {
+            if t[0] == row[0] && t[1] == row[1] && t[2] == row[2] {
+                return level as i32;
+            }
+        }
+        for (level, row) in HIGH_LIGHT.iter().enumerate() {
+            if t[0] == row[0] && t[1] == row[1] && t[2] == row[2] {
+                return level as i32;
+            }
+        }
+        -1
     }
 
     /// Check if camera image is ready.

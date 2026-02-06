@@ -300,7 +300,7 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
     let pattern_data = config.pattern.data();
     for level in 0..16u8 {
         let matrix = generate_dither_matrix(pattern_data, config.high_light, level);
-        let offset = 0x0300 + (level as usize) * 48;
+        let offset = 0x1000 + (level as usize) * 48;
         rom[offset..offset + 48].copy_from_slice(&matrix);
     }
 
@@ -317,6 +317,29 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
     ];
     for (i, masks) in font_masks.iter().enumerate() {
         let offset = 0x0600 + i * 16;
+        for (row, &mask) in masks.iter().enumerate() {
+            let inv = !mask;
+            rom[offset + row * 2] = inv; // low bitplane
+            rom[offset + row * 2 + 1] = inv; // high bitplane
+        }
+    }
+
+    // Digit font data at 0x0670: 10 digits (0-9), 16 bytes each (2bpp)
+    // 1bpp masks (5x7 pixel bitmaps, 1 = white pixel on black background)
+    let digit_masks: [[u8; 8]; 10] = [
+        [0x70, 0x88, 0x98, 0xA8, 0xC8, 0x88, 0x70, 0x00], // 0
+        [0x20, 0x60, 0x20, 0x20, 0x20, 0x20, 0x70, 0x00], // 1
+        [0x70, 0x88, 0x08, 0x30, 0x40, 0x80, 0xF8, 0x00], // 2
+        [0x70, 0x88, 0x08, 0x30, 0x08, 0x88, 0x70, 0x00], // 3
+        [0x10, 0x30, 0x50, 0x90, 0xF8, 0x10, 0x10, 0x00], // 4
+        [0xF8, 0x80, 0xF0, 0x08, 0x08, 0x88, 0x70, 0x00], // 5
+        [0x30, 0x40, 0x80, 0xF0, 0x88, 0x88, 0x70, 0x00], // 6
+        [0xF8, 0x08, 0x10, 0x20, 0x40, 0x40, 0x40, 0x00], // 7
+        [0x70, 0x88, 0x88, 0x70, 0x88, 0x88, 0x70, 0x00], // 8
+        [0x70, 0x88, 0x88, 0x78, 0x08, 0x10, 0x60, 0x00], // 9
+    ];
+    for (i, masks) in digit_masks.iter().enumerate() {
+        let offset = 0x0670 + i * 16;
         for (row, &mask) in masks.iter().enumerate() {
             let inv = !mask;
             rom[offset + row * 2] = inv; // low bitplane
@@ -369,6 +392,34 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x82, // ldh [$FF82], a
     ]);
 
+    // === Init new HRAM vars ===
+    code.extend_from_slice(&[
+        // FF84 = 0 (previous A-button state)
+        0xAF,       // xor a
+        0xE0, 0x84, // ldh [$FF84], a
+        // FF85 = 30 (remaining slots)
+        0x3E, 30,   // ld a, 30
+        0xE0, 0x85, // ldh [$FF85], a
+        // FF86 = 1 (next save slot)
+        0x3E, 0x01, // ld a, 1
+        0xE0, 0x86, // ldh [$FF86], a
+    ]);
+
+    // === Select SRAM bank 0 and init state vector ===
+    code.extend_from_slice(&[
+        // Select bank 0
+        0xAF,             // xor a
+        0xEA, 0x00, 0x40, // ld [$4000], a
+        // Write 0xFF to 30 bytes at $B1B2 (state vector)
+        0x21, 0xB2, 0xB1, // ld hl, $B1B2
+        0x06, 30,         // ld b, 30
+        0x3E, 0xFF,       // ld a, $FF
+        // state_init_loop:
+        0x22,             // ld [hl+], a
+        0x05,             // dec b
+        0x20, 0xFC,       // jr nz, state_init_loop (-4)
+    ]);
+
     // === LCD INIT ===
     code.extend_from_slice(&[
         // BGP palette: standard grayscale mapping
@@ -419,6 +470,21 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x20, 0xFA, // jr nz, font_copy_loop (-6)
     ]);
 
+    // Copy digit font data from ROM $0670 to VRAM $8E80 (tiles 232-241, 160 bytes)
+    code.extend_from_slice(&[
+        0x21, 0x70, 0x06, // ld hl, $0670 (ROM source)
+        0x11, 0x80, 0x8E, // ld de, $8E80 (VRAM dest, tile 232)
+        0x01, 0xA0, 0x00, // ld bc, $00A0 (160 bytes)
+        // digit_copy_loop:
+        0x2A,             // ld a, [hl+]
+        0x12,             // ld [de], a
+        0x13,             // inc de
+        0x0B,             // dec bc
+        0x78,             // ld a, b
+        0xB1,             // or c
+        0x20, 0xF8,       // jr nz, digit_copy_loop (-8)
+    ]);
+
     // Write camera tile indices (0-223) into 16x14 region of 32-wide tile map
     // Centered: start at row 2, col 2 = $9800 + 2*32 + 2 = $9842
     // Use HRAM $FF83 for tile index, B = row counter, C = column counter
@@ -456,6 +522,17 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x3C, // inc a
         0x05, // dec b
         0x20, 0xFB, // jr nz, text_loop (-5)
+    ]);
+
+    // Write initial counter "30" at row 17, col 17 ($9800 + 17*32 + 17 = $9A31)
+    // Digit tiles: 0=$E8, 1=$E9, ..., 9=$F1
+    // '3' = $E8+3 = $EB, '0' = $E8+0 = $E8
+    code.extend_from_slice(&[
+        0x21, 0x31, 0x9A, // ld hl, $9A31
+        0x3E, 0xEB,       // ld a, $EB ('3')
+        0x22,             // ld [hl+], a
+        0x3E, 0xE8,       // ld a, $E8 ('0')
+        0x77,             // ld [hl], a
     ]);
 
     // Enable LCD: BG on, tile data at $8000, map at $9800
@@ -539,6 +616,31 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x3D, // dec a
         0xE0,
         0x82, // ldh [$FF82], a
+        // === Read A button (P14=1, P15=0 -> write $10 to FF00) ===
+        0x3E, 0x10, // ld a, $10
+        0xE0, 0x00, // ldh [$FF00], a
+        0xF0, 0x00, // ldh a, [$FF00] (settle)
+        0xF0, 0x00, // ldh a, [$FF00] (read)
+        0x2F,       // cpl (invert: 1=pressed)
+        0xE6, 0x01, // and $01 (isolate A button, bit 0)
+        0x4F,       // ld c, a (C = current A state)
+        0xF0, 0x84, // ldh a, [$FF84] (prev state)
+        0x57,       // ld d, a
+        0x79,       // ld a, c
+        0xE0, 0x84, // ldh [$FF84], a (update prev = current)
+        0x7A,       // ld a, d
+        0x2F,       // cpl
+        0xA1,       // and c (newly pressed = curr & ~prev)
+        0x28, 0x03, // jr z, +3 (skip CALL if not pressed)
+    ]);
+
+    // CALL save_routine - placeholder, address filled in after code is complete
+    let call_save_patch_offset = code.len();
+    code.extend_from_slice(&[
+        0xCD, 0x00, 0x00, // CALL save_routine (patched later)
+    ]);
+
+    code.extend_from_slice(&[
         // === Select camera register bank (SRAM bank $10) ===
         0x3E,
         0x10, // ld a, $10
@@ -593,7 +695,7 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x19, // add hl, de (x48)
         0x11,
         0x00,
-        0x03, // ld de, $0300
+        0x10, // ld de, $1000
         0x19, // add hl, de
         // === Copy 48-byte dither matrix to A006-A035 ===
         0x11,
@@ -651,6 +753,115 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0xC3,
         (capture_loop_addr & 0xFF) as u8,
         (capture_loop_addr >> 8) as u8,
+    ]);
+
+    // === SAVE ROUTINE ===
+    let save_routine_addr = 0x0150 + code.len() as u16;
+
+    // Patch the CALL save_routine address
+    code[call_save_patch_offset + 1] = (save_routine_addr & 0xFF) as u8;
+    code[call_save_patch_offset + 2] = (save_routine_addr >> 8) as u8;
+
+    code.extend_from_slice(&[
+        // save_routine:
+        // 1. Check remaining > 0
+        0xF0, 0x85,       // ldh a, [$FF85] (remaining)
+        0xB7,             // or a
+        0xC8,             // ret z (no slots left)
+
+        // 2. Read slot number, push for later
+        0xF0, 0x86,       // ldh a, [$FF86] (next slot, 1-based)
+        0xF5,             // push af
+
+        // 3. Calculate dest bank: (slot-1)/2 + 1
+        0x3D,             // dec a (slot-1)
+        0xCB, 0x3F,       // srl a (divide by 2)
+        0x3C,             // inc a (+ 1)
+        0xE0, 0x87,       // ldh [$FF87], a (dest bank)
+
+        // 4. Calculate dest addr high: ((slot-1)&1)*$10 + $A0
+        0xF0, 0x86,       // ldh a, [$FF86]
+        0x3D,             // dec a (slot-1)
+        0xE6, 0x01,       // and $01
+        0xCB, 0x37,       // swap a (0->0, 1->$10)
+        0xC6, 0xA0,       // add $A0 (-> $A0 or $B0)
+        0xE0, 0x88,       // ldh [$FF88], a (dest addr high)
+
+        // 5. Select bank 0, copy 3584 bytes from $A100 -> WRAM $C000
+        0xAF,             // xor a
+        0xEA, 0x00, 0x40, // ld [$4000], a (bank 0)
+        0x21, 0x00, 0xA1, // ld hl, $A100 (SRAM source)
+        0x11, 0x00, 0xC0, // ld de, $C000 (WRAM dest)
+        0x01, 0x00, 0x0E, // ld bc, $0E00 (3584 bytes)
+        // copy_to_wram:
+        0x2A,             // ld a, [hl+]
+        0x12,             // ld [de], a
+        0x13,             // inc de
+        0x0B,             // dec bc
+        0x78,             // ld a, b
+        0xB1,             // or c
+        0x20, 0xF8,       // jr nz, copy_to_wram (-8)
+
+        // 6. Select dest bank, copy 3584 bytes from WRAM $C000 -> dest addr
+        0xF0, 0x87,       // ldh a, [$FF87] (dest bank)
+        0xEA, 0x00, 0x40, // ld [$4000], a
+        0x21, 0x00, 0xC0, // ld hl, $C000 (WRAM source)
+        0xF0, 0x88,       // ldh a, [$FF88] (dest addr high)
+        0x57,             // ld d, a
+        0x1E, 0x00,       // ld e, $00 (dest addr low = 0)
+        0x01, 0x00, 0x0E, // ld bc, $0E00 (3584 bytes)
+        // copy_to_sram:
+        0x2A,             // ld a, [hl+]
+        0x12,             // ld [de], a
+        0x13,             // inc de
+        0x0B,             // dec bc
+        0x78,             // ld a, b
+        0xB1,             // or c
+        0x20, 0xF8,       // jr nz, copy_to_sram (-8)
+
+        // 7. Select bank 0, mark state vector occupied
+        0xAF,             // xor a
+        0xEA, 0x00, 0x40, // ld [$4000], a (bank 0)
+        0xF1,             // pop af (slot number)
+        0x3D,             // dec a (slot-1 = index into state vector)
+        0x5F,             // ld e, a
+        0x16, 0x00,       // ld d, $00
+        0x21, 0xB2, 0xB1, // ld hl, $B1B2
+        0x19,             // add hl, de
+        0x36, 0x00,       // ld [hl], $00 (mark occupied)
+
+        // 8. Increment next slot (FF86)
+        0xF0, 0x86,       // ldh a, [$FF86]
+        0x3C,             // inc a
+        0xE0, 0x86,       // ldh [$FF86], a
+
+        // 9. Decrement remaining (FF85), convert to BCD, write tiles
+        0xF0, 0x85,       // ldh a, [$FF85]
+        0x3D,             // dec a
+        0xE0, 0x85,       // ldh [$FF85], a
+        // Convert A (0-30) to 2-digit BCD
+        // tens digit: A / 10
+        0x47,             // ld b, a (save value)
+        0x0E, 0x00,       // ld c, 0 (tens counter)
+        // div10_loop:
+        0xFE, 0x0A,       // cp 10
+        0x38, 0x05,       // jr c, +5 (done dividing)
+        0xD6, 0x0A,       // sub 10
+        0x0C,             // inc c
+        0x18, 0xF7,       // jr, div10_loop (-9)
+        // Now C = tens, A = ones
+        // Write tens digit tile at $9A31
+        0x47,             // ld b, a (save ones)
+        0x79,             // ld a, c (tens)
+        0xC6, 0xE8,       // add $E8 (tile base for '0')
+        0xEA, 0x31, 0x9A, // ld [$9A31], a
+        // Write ones digit tile at $9A32
+        0x78,             // ld a, b (ones)
+        0xC6, 0xE8,       // add $E8
+        0xEA, 0x32, 0x9A, // ld [$9A32], a
+
+        // 10. Return
+        0xC9,             // ret
     ]);
 
     rom[0x150..0x150 + code.len()].copy_from_slice(&code);
@@ -773,19 +984,21 @@ fn main() -> std::io::Result<()> {
     println!("Generated {} ({} bytes)", output_path, rom.len());
     println!();
     println!("{config}");
-    println!("D-PAD controls (real-time adjustment):");
+    println!("Controls:");
     println!("  Up:    Increase brightness (exposure +0x0400)");
     println!("  Down:  Decrease brightness (exposure -0x0400)");
     println!("  Right: Increase contrast (+1, max 15)");
     println!("  Left:  Decrease contrast (-1, min 0)");
+    println!("  A:     Save photo to next slot (30 slots total)");
     println!();
     println!("Camera capture loop:");
-    println!("  1. Reads D-PAD input and adjusts exposure/contrast");
-    println!("  2. Configures camera registers at A001-A035");
-    println!("  3. Triggers capture by writing 0x01 to A000");
-    println!("  4. Polls A000 until bit 0 clears");
-    println!("  5. Copies image from SRAM to VRAM for LCD display");
-    println!("  6. Repeats continuously");
+    println!("  1. Reads D-PAD + A button input");
+    println!("  2. Adjusts exposure/contrast, saves photo on A press");
+    println!("  3. Configures camera registers at A001-A035");
+    println!("  4. Triggers capture by writing 0x01 to A000");
+    println!("  5. Polls A000 until bit 0 clears");
+    println!("  6. Copies image from SRAM to VRAM for LCD display");
+    println!("  7. Repeats continuously");
 
     Ok(())
 }
@@ -799,36 +1012,36 @@ mod tests {
         let config = CameraConfig::default();
         let rom = build_rom(&config);
 
-        // Find last non-zero byte in code region (0x0150 to 0x02FF)
+        // Find last non-zero byte in code region (0x0150 to 0x05FF)
         let mut last_code_addr = 0x0150;
-        for i in 0x0150..0x0300 {
+        for i in 0x0150..0x0600 {
             if rom[i] != 0 {
                 last_code_addr = i;
             }
         }
 
         let code_size = last_code_addr - 0x0150 + 1;
-        let space_before_dither = 0x0300 - last_code_addr - 1;
+        let space_before_font = 0x0600 - last_code_addr - 1;
 
-        // Code must not overlap dither data at 0x0300
+        // Code must not overlap font data at 0x0600
         assert!(
-            last_code_addr < 0x0300,
-            "Code extends past 0x02FF into dither data region! Last byte at 0x{:04X}",
+            last_code_addr < 0x0600,
+            "Code extends past 0x05FF into font data region! Last byte at 0x{:04X}",
             last_code_addr
         );
 
-        // Verify dither data is intact at 0x0300
-        assert_ne!(rom[0x0300], 0, "Dither data at 0x0300 should be non-zero");
-
-        // Verify font data at 0x0600 doesn't overlap dither data (ends at 0x05FF)
+        // Verify font data at 0x0600 is present
         assert_eq!(
             rom[0x0600], 0xFF,
             "Font data at 0x0600 should start with 0xFF"
         );
 
+        // Verify dither data is intact at 0x1000
+        assert_ne!(rom[0x1000], 0, "Dither data at 0x1000 should be non-zero");
+
         println!(
-            "Code size: {} bytes (0x0150-0x{:04X}), {} bytes spare before dither data",
-            code_size, last_code_addr, space_before_dither
+            "Code size: {} bytes (0x0150-0x{:04X}), {} bytes spare before font data",
+            code_size, last_code_addr, space_before_font
         );
     }
 

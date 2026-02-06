@@ -130,6 +130,11 @@ pub struct Memory {
     camera_image: Box<[u8; 128 * 112]>,
     camera_image_ready: bool,
     camera_capture_dirty: bool,
+
+    // Smoothed exposure factor — real sensors have settling time from charge integration
+    // and analog noise that naturally damps autoexposure feedback loops. This prevents
+    // oscillation when ROMs adjust exposure every frame.
+    camera_exposure_smooth: f32,
 }
 
 impl Memory {
@@ -153,6 +158,7 @@ impl Memory {
             camera_image: Box::new([0; 128 * 112]),
             camera_image_ready: false,
             camera_capture_dirty: false,
+            camera_exposure_smooth: 1.0,
         };
         mem.init_io_defaults();
         mem
@@ -583,6 +589,11 @@ impl Memory {
     pub fn load_cartridge_ram(&mut self, data: &[u8]) {
         let len = data.len().min(self.cartridge_ram.len());
         self.cartridge_ram[..len].copy_from_slice(&data[..len]);
+    }
+
+    /// Read a camera hardware register directly (index 0x00-0x7F).
+    pub fn camera_reg(&self, index: u8) -> u8 {
+        self.camera_regs[(index & 0x7F) as usize]
     }
 
     /// Get serial output as a string (for test ROM debugging).

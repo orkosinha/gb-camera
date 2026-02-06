@@ -144,6 +144,25 @@ export function createCamera(state, domRefs) {
         }
         liveImageData.data.set(rgba);
         liveCtx.putImageData(liveImageData, 0, 0);
+
+        updateSettings();
+    }
+
+    function updateSettings() {
+        const el = domRefs.cameraSettings;
+        if (!el || !state.emulator) return;
+
+        // Camera registers: A001=config, A002=exposure lo, A003=exposure hi, A005=voltage offset
+        const reg1 = state.emulator.camera_reg(1);
+        const expLo = state.emulator.camera_reg(2);
+        const expHi = state.emulator.camera_reg(3);
+        const offset = state.emulator.camera_reg(5);
+        const exposure = (expHi << 8) | expLo;
+        const gain = (reg1 >> 4) & 0x03;
+        const contrast = state.emulator.camera_contrast();
+        const contrastStr = contrast >= 0 ? `${contrast}/15` : '?';
+
+        el.textContent = `Exposure: 0x${exposure.toString(16).toUpperCase().padStart(4, '0')}  Contrast: ${contrastStr}  Gain: ${gain}  Offset: ${offset}`;
     }
 
     function updateGallery() {

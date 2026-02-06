@@ -155,6 +155,16 @@ impl GameBoy {
         self.core.decode_camera_photo(slot)
     }
 
+    /// Read a camera hardware register (0x00-0x7F, corresponding to A000-A07F).
+    pub fn camera_reg(&self, index: u8) -> u8 {
+        self.core.memory.camera_reg(index)
+    }
+
+    /// Derive the contrast level (0-15) from the current dither matrix, or -1 if unknown.
+    pub fn camera_contrast(&self) -> i32 {
+        self.core.memory.camera_contrast()
+    }
+
     /// Get serial output as a string (for test ROM debugging).
     pub fn get_serial_output(&self) -> String {
         self.core.memory.get_serial_output_string()
