@@ -109,6 +109,7 @@ impl GameBoyCore {
     /// Execute a single CPU instruction, ticking timer and PPU.
     /// If a frame boundary is crossed (VBlank entry), renders the frame.
     /// Returns the number of T-cycles consumed.
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: step_instruction
     pub(crate) fn step_single(&mut self) -> u32 {
         let cycles = {
             let mut bus = MemoryBus::new(&mut self.memory, &mut self.timer, &mut self.joypad);
@@ -203,5 +204,20 @@ impl GameBoyCore {
 
     pub(crate) fn decode_camera_photo(&self, slot: u8) -> Vec<u8> {
         self.memory.decode_camera_photo(slot)
+    }
+
+    #[cfg_attr(not(feature = "ios"), allow(dead_code))] // ios: gb_encode_camera_photo
+    pub(crate) fn encode_camera_photo(&mut self, slot: u8, rgba: &[u8]) -> bool {
+        self.memory.encode_camera_photo(slot, rgba)
+    }
+
+    #[cfg_attr(not(feature = "ios"), allow(dead_code))] // ios: gb_clear_camera_photo_slot
+    pub(crate) fn clear_camera_photo_slot(&mut self, slot: u8) {
+        self.memory.clear_camera_photo_slot(slot)
+    }
+
+    #[cfg_attr(not(feature = "ios"), allow(dead_code))] // ios: gb_camera_photo_count
+    pub(crate) fn camera_photo_count(&self) -> u8 {
+        self.memory.camera_photo_count()
     }
 }

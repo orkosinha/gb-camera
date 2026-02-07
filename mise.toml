@@ -118,6 +118,19 @@ description = "Build Rust static library for iOS simulator only"
 dir = "emu"
 run = "cargo build --target aarch64-apple-ios-sim --features ios --no-default-features --release"
 
+[tasks."build:xcode"]
+description = "Build iOS app with xcodebuild (simulator)"
+depends = ["build:ios"]
+run = """
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+xcodebuild build \
+  -project ios/gb-ios.xcodeproj \
+  -scheme gb-ios \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -quiet \
+  CODE_SIGNING_ALLOWED=NO
+"""
+
 [tasks."xcode:open"]
 description = "Open iOS project in Xcode"
 run = "open ios/gb-ios.xcodeproj"

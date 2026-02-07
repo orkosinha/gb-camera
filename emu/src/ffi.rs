@@ -292,6 +292,104 @@ pub extern "C" fn gb_load_save_data(handle: *mut c_void, data: *const u8, len: u
     }
 }
 
+/// Get the current camera contrast level (0-15, or -1 if unknown).
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_camera_contrast(handle: *const c_void) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    unsafe {
+        let gb = &*(handle as *const GameBoyHandle);
+        gb.core.memory.camera_contrast()
+    }
+}
+
+/// Set or clear the camera exposure override.
+/// When `exposure` is 0-65535, that value is used instead of the ROM's.
+/// When `exposure` is -1, the override is cleared and the ROM controls exposure.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_set_camera_exposure(handle: *mut c_void, exposure: i32) {
+    if handle.is_null() {
+        return;
+    }
+
+    unsafe {
+        let gb = &mut *(handle as *mut GameBoyHandle);
+        if exposure < 0 {
+            gb.core.memory.set_camera_exposure_override(None);
+        } else {
+            gb.core.memory.set_camera_exposure_override(Some(exposure as u16));
+        }
+    }
+}
+
+/// Encode RGBA pixel data into a GB Camera SRAM slot.
+/// Slots 1-30 = saved photos. `rgba` must point to 128*112*4 bytes.
+/// Returns true on success, false on invalid slot or bad data.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_encode_camera_photo(
+    handle: *mut c_void,
+    slot: u8,
+    rgba: *const u8,
+    len: usize,
+) -> bool {
+    if handle.is_null() || rgba.is_null() {
+        return false;
+    }
+
+    let expected = 128 * 112 * 4;
+    if len != expected {
+        return false;
+    }
+
+    unsafe {
+        let gb = &mut *(handle as *mut GameBoyHandle);
+        let data = slice::from_raw_parts(rgba, len);
+        gb.core.encode_camera_photo(slot, data)
+    }
+}
+
+/// Clear a GB Camera SRAM slot (zero out tile data).
+/// Slots 1-30 = saved photos.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_clear_camera_photo_slot(handle: *mut c_void, slot: u8) {
+    if handle.is_null() {
+        return;
+    }
+
+    unsafe {
+        let gb = &mut *(handle as *mut GameBoyHandle);
+        gb.core.clear_camera_photo_slot(slot);
+    }
+}
+
+/// Get the number of occupied photo slots (0-30) by scanning the SRAM state vector.
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_camera_photo_count(handle: *const c_void) -> u8 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let gb = &*(handle as *const GameBoyHandle);
+        gb.core.camera_photo_count()
+    }
+}
+
+/// Read a byte from any memory address (for HRAM polling etc.).
+#[unsafe(no_mangle)]
+pub extern "C" fn gb_read_memory(handle: *const c_void, addr: u16) -> u8 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let gb = &*(handle as *const GameBoyHandle);
+        gb.core.memory.read(addr)
+    }
+}
+
 // Button constants for Swift
 pub const GB_BUTTON_A: u8 = crate::joypad::Button::A as u8;
 pub const GB_BUTTON_B: u8 = crate::joypad::Button::B as u8;

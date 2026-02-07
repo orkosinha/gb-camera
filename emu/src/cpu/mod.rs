@@ -16,7 +16,7 @@ use crate::log_info;
 use crate::memory::io;
 
 /// Debug state for CPU inspection.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: cpu_* accessors
 pub struct CpuDebugState {
     pub pc: u16,
     pub sp: u16,
@@ -293,7 +293,7 @@ impl Cpu {
     }
 
     /// Get current CPU state for debugging.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: cpu_* accessors
     pub fn get_debug_state(&self) -> CpuDebugState {
         CpuDebugState {
             pc: self.pc,

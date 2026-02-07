@@ -50,6 +50,19 @@ void gb_set_button(GBHandle handle, uint8_t button, bool pressed);
 // Camera
 void gb_set_camera_image(GBHandle handle, const uint8_t* data, size_t len);
 bool gb_is_camera_cartridge(GBHandle handle);
+bool gb_is_camera_ready(GBHandle handle);
+bool gb_update_camera_live(GBHandle handle);
+const uint8_t* gb_camera_live_ptr(GBHandle handle);
+size_t gb_camera_live_len(void);
+size_t gb_decode_camera_photo(GBHandle handle, uint8_t slot, uint8_t* buffer, size_t buffer_len);
+int32_t gb_camera_contrast(GBHandle handle);
+void gb_set_camera_exposure(GBHandle handle, int32_t exposure);
+bool gb_encode_camera_photo(GBHandle handle, uint8_t slot, const uint8_t* rgba, size_t len);
+void gb_clear_camera_photo_slot(GBHandle handle, uint8_t slot);
+uint8_t gb_camera_photo_count(GBHandle handle);
+
+// Memory
+uint8_t gb_read_memory(GBHandle handle, uint16_t addr);
 
 // Save data
 size_t gb_get_save_size(GBHandle handle);

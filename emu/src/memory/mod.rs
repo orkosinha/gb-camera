@@ -16,6 +16,7 @@ const ROM_BANK_SIZE: usize = 0x4000; // 16KB
 const RAM_BANK_SIZE: usize = 0x2000; // 8KB
 
 /// Named constants for Game Boy I/O register offsets (relative to 0xFF00).
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: io_* accessors
 pub(crate) mod io {
     pub const JOYP: u8 = 0x00;
     pub const DIV: u8 = 0x04;
@@ -37,7 +38,7 @@ pub(crate) mod io {
 }
 
 /// Debug state for Memory inspection.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: log_frame_debug
 pub struct MemoryDebugState {
     pub rom_bank: u16,
     pub ram_bank: u8,
@@ -56,7 +57,7 @@ impl fmt::Display for MemoryDebugState {
 }
 
 /// I/O register state for debugging.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: load_rom, log_frame_debug
 pub struct IoState {
     pub lcdc: u8,
     pub stat: u8,
@@ -135,6 +136,10 @@ pub struct Memory {
     // and analog noise that naturally damps autoexposure feedback loops. This prevents
     // oscillation when ROMs adjust exposure every frame.
     camera_exposure_smooth: f32,
+
+    // Optional exposure override — when Some, process_camera_capture uses this value
+    // instead of camera_regs[0x02..0x03], bypassing ROM control.
+    camera_exposure_override: Option<u16>,
 }
 
 impl Memory {
@@ -159,6 +164,7 @@ impl Memory {
             camera_image_ready: false,
             camera_capture_dirty: false,
             camera_exposure_smooth: 1.0,
+            camera_exposure_override: None,
         };
         mem.init_io_defaults();
         mem
@@ -592,18 +598,27 @@ impl Memory {
     }
 
     /// Read a camera hardware register directly (index 0x00-0x7F).
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: camera_reg
     pub fn camera_reg(&self, index: u8) -> u8 {
         self.camera_regs[(index & 0x7F) as usize]
     }
 
+    /// Set or clear the exposure override.
+    /// When `Some(value)`, camera captures use this exposure instead of the ROM's.
+    /// When `None`, the ROM controls exposure normally.
+    #[cfg_attr(not(feature = "ios"), allow(dead_code))] // ios: gb_set_camera_exposure
+    pub fn set_camera_exposure_override(&mut self, value: Option<u16>) {
+        self.camera_exposure_override = value;
+    }
+
     /// Get serial output as a string (for test ROM debugging).
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: get_serial_output
     pub fn get_serial_output_string(&self) -> String {
         String::from_utf8_lossy(&self.serial_output).to_string()
     }
 
     /// Clear the serial output buffer.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: clear_serial_output
     pub fn clear_serial_output(&mut self) {
         self.serial_output.clear();
     }
@@ -614,13 +629,13 @@ impl Memory {
     }
 
     /// Get the number of ROM banks.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: load_rom
     pub fn get_rom_bank_count(&self) -> usize {
         self.rom.len() / ROM_BANK_SIZE
     }
 
     /// Get current memory state for debugging.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: log_frame_debug
     pub fn get_debug_state(&self) -> MemoryDebugState {
         MemoryDebugState {
             rom_bank: self.rom_bank,
@@ -631,7 +646,7 @@ impl Memory {
     }
 
     /// Get current I/O register state for debugging.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: load_rom, log_frame_debug
     pub fn get_io_state(&self) -> IoState {
         IoState {
             lcdc: self.io[0x40],
@@ -646,7 +661,7 @@ impl Memory {
     }
 
     /// Check if LCD is enabled.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: log_frame_debug
     pub fn is_lcd_enabled(&self) -> bool {
         self.io[0x40] & 0x80 != 0
     }

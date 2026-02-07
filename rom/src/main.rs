@@ -22,7 +22,10 @@ const NINTENDO_LOGO: [u8; 48] = [
 
 // ============================================================================
 // Dither patterns from gb-photo (4x4 matrices, values 0x00-0x0F)
-// https://github.com/untoxa/gb-photo/
+// References:
+// - https://gbdev.io/pandocs/Gameboy_Camera.html
+// - https://github.com/Raphael-Boichot/Inject-pictures-in-your-Game-Boy-Camera-saves
+// - https://github.com/untoxa/gb-photo/
 // These are indices that determine ordering of thresholds
 // ============================================================================
 

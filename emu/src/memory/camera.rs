@@ -1,8 +1,37 @@
 //! Game Boy Camera (Pocket Camera) sensor emulation and photo decoding.
+//!
+//! ## SRAM layout (128KB = 16 banks × 8KB)
+//!
+//! | Offset        | Content                                      |
+//! |---------------|----------------------------------------------|
+//! | 0x00000-0x00FF| Camera sensor buffer / metadata               |
+//! | 0x00100-0x00EFF| Active capture (slot 0): 128×112 2bpp tiles  |
+//! | 0x011B2-0x011CF| State vector: 30 bytes, one per saved slot   |
+//! | 0x011D5-0x011D6| State vector checksum (sum, xor)             |
+//! | 0x02000-0x1FFFF| Photo slots 1-30 (4KB each, 2 per bank)     |
+//!
+//! ## State vector
+//!
+//! Each byte tracks whether a slot is occupied:
+//! - `0xFF` = empty/erased
+//! - `0x00..0x1D` = image number (occupied)
+//!
+//! References:
+//! - https://gbdev.io/pandocs/Gameboy_Camera.html
+//! - https://github.com/Raphael-Boichot/Inject-pictures-in-your-Game-Boy-Camera-saves
+//! - https://github.com/untoxa/gb-photo/
 
 use super::{Memory, RAM_BANK_SIZE};
 use crate::log::{LogCategory, RateLimiter};
 use crate::{log_info, log_info_limited};
+
+/// Start of the 30-byte state vector in SRAM bank 0.
+/// Each byte corresponds to a saved photo slot (1-30).
+/// `0xFF` = empty, `0x00..0x1D` = image number (occupied).
+const STATE_VECTOR_OFFSET: usize = 0x11B2;
+
+/// Number of saved photo slots (1-30).
+const NUM_PHOTO_SLOTS: usize = 30;
 
 impl Memory {
     /// Set camera image data from external source (e.g., webcam).
@@ -60,7 +89,9 @@ impl Memory {
         let voltage_offset = self.camera_regs[0x05];
 
         // Parse register values
-        let exposure = ((exposure_high as u16) << 8) | (exposure_low as u16);
+        let exposure = self
+            .camera_exposure_override
+            .unwrap_or(((exposure_high as u16) << 8) | (exposure_low as u16));
         let gain_bits = (reg_a001 >> 4) & 0x03; // 00=high gain, 11=low gain
         let edge_mode = (reg_a004 >> 4) & 0x07;
         let output_negative = (reg_a001 & 0x02) != 0;
@@ -311,11 +342,8 @@ impl Memory {
         const TILES_Y: usize = HEIGHT / TILE_SIZE;
         const TILE_BYTES: usize = 16;
         const PHOTO_BYTES: usize = TILES_X * TILES_Y * TILE_BYTES; // 3584
-        // GB Camera state vector: 30 bytes at SRAM 0x11B2, one per slot.
-        // 0xFF = empty/erased, anything else = occupied.
-        const STATE_VECTOR_OFFSET: usize = 0x11B2;
 
-        // For saved slots (1-30), check the ROM's state vector
+        // For saved slots (1-30), check the state vector
         if (1..=30).contains(&slot) {
             let state_idx = STATE_VECTOR_OFFSET + (slot - 1) as usize;
             if state_idx < self.cartridge_ram.len() && self.cartridge_ram[state_idx] == 0xFF {
@@ -366,6 +394,95 @@ impl Memory {
         }
 
         rgba
+    }
+
+    /// Encode RGBA pixel data into a GB Camera SRAM slot (inverse of decode_camera_photo).
+    /// Accepts 128x112x4 RGBA bytes. Maps gray channel to 2-bit colors and packs into tiles.
+    /// Slots 1-30 = saved photos in banks 1-15 (2 per bank).
+    /// Also marks the slot as occupied in the state vector.
+    /// Returns false if slot is out of range or rgba is wrong size.
+    pub fn encode_camera_photo(&mut self, slot: u8, rgba: &[u8]) -> bool {
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 112;
+        const TILE_SIZE: usize = 8;
+        const TILES_X: usize = WIDTH / TILE_SIZE;
+        const TILES_Y: usize = HEIGHT / TILE_SIZE;
+        const TILE_BYTES: usize = 16;
+        const PHOTO_BYTES: usize = TILES_X * TILES_Y * TILE_BYTES; // 3584
+
+        if slot == 0 || slot > 30 || rgba.len() != WIDTH * HEIGHT * 4 {
+            return false;
+        }
+
+        let adjusted = (slot - 1) as usize;
+        let bank = adjusted / 2 + 1;
+        let offset_in_bank = (adjusted % 2) * 0x1000;
+        let sram_offset = bank * RAM_BANK_SIZE + offset_in_bank;
+
+        if sram_offset + PHOTO_BYTES > self.cartridge_ram.len() {
+            return false;
+        }
+
+        for tile_y in 0..TILES_Y {
+            for tile_x in 0..TILES_X {
+                let tile_index = tile_y * TILES_X + tile_x;
+                let sram_addr = sram_offset + tile_index * TILE_BYTES;
+
+                for row in 0..TILE_SIZE {
+                    let pixel_y = tile_y * TILE_SIZE + row;
+                    let mut low_byte: u8 = 0;
+                    let mut high_byte: u8 = 0;
+
+                    for col in 0..TILE_SIZE {
+                        let pixel_x = tile_x * TILE_SIZE + col;
+                        let i = (pixel_y * WIDTH + pixel_x) * 4;
+                        let gray = rgba[i]; // R channel (grayscale, so R=G=B)
+
+                        // Map gray to 2-bit color (exact palette match with nearest fallback)
+                        let color: u8 = match gray {
+                            0xC0..=0xFF => 0, // white
+                            0x80..=0xBF => 1, // light gray
+                            0x40..=0x7F => 2, // dark gray
+                            0x00..=0x3F => 3, // black
+                        };
+
+                        let bit_pos = 7 - col;
+                        low_byte |= (color & 0x01) << bit_pos;
+                        high_byte |= ((color >> 1) & 0x01) << bit_pos;
+                    }
+
+                    self.cartridge_ram[sram_addr + row * 2] = low_byte;
+                    self.cartridge_ram[sram_addr + row * 2 + 1] = high_byte;
+                }
+            }
+        }
+
+        // Mark slot as occupied in the state vector (image number = slot - 1)
+        self.set_state_vector_entry(slot, adjusted as u8);
+
+        true
+    }
+
+    /// Clear a GB Camera SRAM slot (zero out the tile data and mark empty in state vector).
+    /// Slots 1-30 = saved photos.
+    pub fn clear_camera_photo_slot(&mut self, slot: u8) {
+        const PHOTO_BYTES: usize = (128 / 8) * (112 / 8) * 16; // 3584
+
+        if slot == 0 || slot > 30 {
+            return;
+        }
+
+        let adjusted = (slot - 1) as usize;
+        let bank = adjusted / 2 + 1;
+        let offset_in_bank = (adjusted % 2) * 0x1000;
+        let sram_offset = bank * RAM_BANK_SIZE + offset_in_bank;
+
+        if sram_offset + PHOTO_BYTES <= self.cartridge_ram.len() {
+            self.cartridge_ram[sram_offset..sram_offset + PHOTO_BYTES].fill(0);
+        }
+
+        // Mark slot as empty in the state vector
+        self.set_state_vector_entry(slot, 0xFF);
     }
 
     /// Derive the contrast level (0-15) from the current dither matrix in camera registers.
@@ -419,10 +536,10 @@ impl Memory {
         // This yields the base thresholds [t0, t1, t2].
         let mut t = [0xFFu8; 3];
         for pos in 0..16 {
-            for ch in 0..3 {
+            for (ch, th) in t.iter_mut().enumerate() {
                 let val = self.camera_regs[0x06 + pos * 3 + ch];
-                if val < t[ch] {
-                    t[ch] = val;
+                if val < *th {
+                    *th = val;
                 }
             }
         }
@@ -462,5 +579,57 @@ impl Memory {
         const PHOTO_BYTES: usize = 128 / 8 * 112 / 8 * 16; // 3584
         let end = (0x0100 + PHOTO_BYTES).min(self.cartridge_ram.len());
         &self.cartridge_ram[0x0100..end]
+    }
+
+    /// Write a state vector entry for a photo slot and update the checksum.
+    ///
+    /// `slot` is 1-based (1-30). `value` is the image number (`0x00..0x1D`)
+    /// for an occupied slot, or `0xFF` for an empty/erased slot.
+    ///
+    /// The state vector checksum at SRAM `0x11D5-0x11D6` uses two bytes:
+    ///   - byte 0: 8-bit sum of the 30 state vector entries
+    ///   - byte 1: 8-bit XOR of the 30 state vector entries
+    fn set_state_vector_entry(&mut self, slot: u8, value: u8) {
+        if slot == 0 || slot > NUM_PHOTO_SLOTS as u8 {
+            return;
+        }
+
+        let idx = STATE_VECTOR_OFFSET + (slot - 1) as usize;
+        if idx >= self.cartridge_ram.len() {
+            return;
+        }
+
+        self.cartridge_ram[idx] = value;
+        self.update_state_vector_checksum();
+    }
+
+    /// Recompute the 2-byte state vector checksum at SRAM `0x11D5-0x11D6`.
+    fn update_state_vector_checksum(&mut self) {
+        const CHECKSUM_OFFSET: usize = 0x11D5;
+
+        let end = STATE_VECTOR_OFFSET + NUM_PHOTO_SLOTS;
+        if end > self.cartridge_ram.len() || CHECKSUM_OFFSET + 1 >= self.cartridge_ram.len() {
+            return;
+        }
+
+        let mut sum: u8 = 0;
+        let mut xor: u8 = 0;
+        for &b in &self.cartridge_ram[STATE_VECTOR_OFFSET..end] {
+            sum = sum.wrapping_add(b);
+            xor ^= b;
+        }
+
+        self.cartridge_ram[CHECKSUM_OFFSET] = sum;
+        self.cartridge_ram[CHECKSUM_OFFSET + 1] = xor;
+    }
+
+    /// Return the number of occupied photo slots (0-30) by scanning the state vector.
+    #[cfg_attr(not(any(feature = "ios", feature = "wasm")), allow(dead_code))] // ios: gb_camera_photo_count
+    pub fn camera_photo_count(&self) -> u8 {
+        let end = (STATE_VECTOR_OFFSET + NUM_PHOTO_SLOTS).min(self.cartridge_ram.len());
+        self.cartridge_ram[STATE_VECTOR_OFFSET..end]
+            .iter()
+            .filter(|&&b| b != 0xFF)
+            .count() as u8
     }
 }
