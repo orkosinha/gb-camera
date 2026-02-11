@@ -102,6 +102,7 @@ impl GameBoyCore {
         self.total_cycles += cycles_elapsed as u64;
         self.frame_count += 1;
 
+        self.memory.tick_rtc();
         self.render_frame();
         instructions_this_frame
     }

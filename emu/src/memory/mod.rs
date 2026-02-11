@@ -6,8 +6,11 @@
 //! sensor emulation and photo decoding.
 
 mod camera;
+mod rtc;
 
 use std::fmt;
+
+use rtc::Rtc;
 
 use crate::log::{LogCategory, RateLimiter};
 use crate::{log_info, log_info_limited};
@@ -132,6 +135,9 @@ pub struct Memory {
     camera_image_ready: bool,
     camera_capture_dirty: bool,
 
+    // MBC3 Real-Time Clock
+    rtc: Rtc,
+
     // Smoothed exposure factor — real sensors have settling time from charge integration
     // and analog noise that naturally damps autoexposure feedback loops. This prevents
     // oscillation when ROMs adjust exposure every frame.
@@ -159,6 +165,7 @@ impl Memory {
             hram: [0; 0x7F],
             ie: 0,
             serial_output: Vec::new(),
+            rtc: Rtc::new(),
             camera_regs: [0; 0x80],
             camera_image: Box::new([0; 128 * 112]),
             camera_image_ready: false,
@@ -259,8 +266,13 @@ impl Memory {
             // Video RAM
             0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize],
 
-            // External RAM / Camera registers
+            // External RAM / Camera registers / RTC
             0xA000..=0xBFFF => {
+                // MBC3 RTC registers
+                if self.mbc_type == MbcType::Mbc3 && Rtc::is_rtc_register(self.ram_bank) {
+                    return self.rtc.read_register(self.ram_bank);
+                }
+
                 // Game Boy Camera: bank 0x10+ maps to camera registers
                 // Camera registers are accessible regardless of ram_enabled state
                 if self.mbc_type == MbcType::PocketCamera && self.ram_bank >= 0x10 {
@@ -405,7 +417,11 @@ impl Memory {
                             self.rom_bank = (self.rom_bank & 0x1F) | ((value as u16 & 0x03) << 5);
                         }
                     }
-                    MbcType::Mbc3 | MbcType::Mbc5 => {
+                    MbcType::Mbc3 => {
+                        // MBC3: 0x00-0x03 = RAM banks, 0x08-0x0C = RTC registers
+                        self.ram_bank = value;
+                    }
+                    MbcType::Mbc5 => {
                         self.ram_bank = value & 0x0F;
                     }
                     MbcType::PocketCamera => {
@@ -428,18 +444,24 @@ impl Memory {
                 }
             }
 
-            // Banking mode select (0x6000-0x7FFF)
-            0x6000..=0x7FFF => {
-                if self.mbc_type == MbcType::Mbc1 {
-                    self.mbc1_mode = (value & 0x01) != 0;
-                }
-            }
+            // Banking mode select / RTC latch (0x6000-0x7FFF)
+            0x6000..=0x7FFF => match self.mbc_type {
+                MbcType::Mbc1 => self.mbc1_mode = (value & 0x01) != 0,
+                MbcType::Mbc3 => self.rtc.write_latch(value),
+                _ => {}
+            },
 
             // Video RAM
             0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize] = value,
 
-            // External RAM / Camera registers
+            // External RAM / Camera registers / RTC
             0xA000..=0xBFFF => {
+                // MBC3 RTC registers
+                if self.mbc_type == MbcType::Mbc3 && Rtc::is_rtc_register(self.ram_bank) {
+                    self.rtc.write_register(self.ram_bank, value);
+                    return;
+                }
+
                 // Game Boy Camera: bank 0x10+ = camera registers
                 // Camera registers are accessible regardless of ram_enabled state
                 if self.mbc_type == MbcType::PocketCamera && self.ram_bank >= 0x10 {
@@ -621,6 +643,11 @@ impl Memory {
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: clear_serial_output
     pub fn clear_serial_output(&mut self) {
         self.serial_output.clear();
+    }
+
+    /// Advance the RTC based on wall-clock elapsed time.
+    pub fn tick_rtc(&mut self) {
+        self.rtc.tick();
     }
 
     /// Get the detected MBC type.
