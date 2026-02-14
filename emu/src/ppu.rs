@@ -70,6 +70,8 @@ pub struct Ppu {
     line: u8,
     window_line_counter: u8,
     pub(crate) frame_ready: bool,
+    /// GBC colour mode — set once at load_rom time, never changes mid-session.
+    cgb_mode: bool,
 }
 
 impl Ppu {
@@ -81,7 +83,15 @@ impl Ppu {
             line: 0,
             window_line_counter: 0,
             frame_ready: false,
+            cgb_mode: false,
         }
+    }
+
+    /// Reset PPU to power-on state for the given mode.
+    /// Called by GameBoyCore::load_rom() on every ROM load.
+    pub fn reset(&mut self, cgb_mode: bool) {
+        *self = Self::new();
+        self.cgb_mode = cgb_mode;
     }
 
     pub fn tick(&mut self, cycles: u32, memory: &mut Memory, interrupts: &InterruptController) {

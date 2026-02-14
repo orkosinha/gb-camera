@@ -292,6 +292,21 @@ impl Cpu {
         (high << 8) | low
     }
 
+    /// Reset CPU to power-on state for the given mode.
+    /// Called by GameBoyCore::load_rom() on every ROM load.
+    pub fn reset(&mut self, cgb_mode: bool) {
+        *self = Self::new();
+        if cgb_mode {
+            // GBC ROMs check A == 0x11 at 0x0100 to detect GBC hardware.
+            self.a = 0x11;
+        }
+    }
+
+    /// Set GBC initial register state (A=0x11).
+    pub fn set_cgb_initial_state(&mut self) {
+        self.a = 0x11;
+    }
+
     /// Get current CPU state for debugging.
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: cpu_* accessors
     pub fn get_debug_state(&self) -> CpuDebugState {
@@ -348,7 +363,7 @@ mod tests {
                 rom[0x100 + i] = byte;
             }
         }
-        mem.load_rom(&rom).unwrap();
+        mem.load_rom(&rom, false).unwrap();
         TestContext {
             cpu: Cpu::new(),
             memory: mem,

@@ -41,9 +41,11 @@ pub extern "C" fn gb_destroy(handle: *mut c_void) {
 }
 
 /// Load a ROM into the emulator.
+/// Pass cgb_mode=true to run in Game Boy Color mode (enables colour palettes, VRAM banking, etc.).
+/// Pass cgb_mode=false for standard DMG mode (existing behaviour).
 /// Returns true on success, false on failure.
 #[unsafe(no_mangle)]
-pub extern "C" fn gb_load_rom(handle: *mut c_void, data: *const u8, len: usize) -> bool {
+pub extern "C" fn gb_load_rom(handle: *mut c_void, data: *const u8, len: usize, cgb_mode: bool) -> bool {
     if handle.is_null() || data.is_null() || len == 0 {
         return false;
     }
@@ -51,7 +53,7 @@ pub extern "C" fn gb_load_rom(handle: *mut c_void, data: *const u8, len: usize) 
     unsafe {
         let gb = &mut *(handle as *mut GameBoyHandle);
         let rom_data = slice::from_raw_parts(data, len);
-        gb.core.load_rom(rom_data).is_ok()
+        gb.core.load_rom(rom_data, cgb_mode).is_ok()
     }
 }
 

@@ -35,11 +35,12 @@ impl GameBoy {
         }
     }
 
-    pub fn load_rom(&mut self, rom_data: &[u8]) -> Result<(), JsValue> {
+    pub fn load_rom(&mut self, rom_data: &[u8], cgb_mode: bool) -> Result<(), JsValue> {
         log_info!(
             LogCategory::General,
-            "load_rom() - Loading ROM of {} bytes",
-            rom_data.len()
+            "load_rom() - Loading ROM of {} bytes (cgb_mode={})",
+            rom_data.len(),
+            cgb_mode
         );
 
         // Log ROM header information before loading
@@ -72,7 +73,7 @@ impl GameBoy {
             );
         }
 
-        self.core.load_rom(rom_data).map_err(JsValue::from_str)?;
+        self.core.load_rom(rom_data, cgb_mode).map_err(JsValue::from_str)?;
 
         log_info!(
             LogCategory::General,

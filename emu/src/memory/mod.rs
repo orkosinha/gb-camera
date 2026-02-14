@@ -6,10 +6,12 @@
 //! sensor emulation and photo decoding.
 
 mod camera;
+mod cgb;
 mod rtc;
 
 use std::fmt;
 
+use cgb::Cgb;
 use rtc::Rtc;
 
 use crate::log::{LogCategory, RateLimiter};
@@ -19,7 +21,7 @@ const ROM_BANK_SIZE: usize = 0x4000; // 16KB
 const RAM_BANK_SIZE: usize = 0x2000; // 8KB
 
 /// Named constants for Game Boy I/O register offsets (relative to 0xFF00).
-#[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: io_* accessors
+#[allow(dead_code)] // constants used selectively across wasm/ios/ppu/cpu modules
 pub(crate) mod io {
     pub const JOYP: u8 = 0x00;
     pub const DIV: u8 = 0x04;
@@ -38,6 +40,20 @@ pub(crate) mod io {
     pub const OBP1: u8 = 0x49;
     pub const WY: u8 = 0x4A;
     pub const WX: u8 = 0x4B;
+    // GBC registers
+    pub const KEY1: u8 = 0x4D; // speed switch
+    pub const VBK: u8 = 0x4F;  // VRAM bank
+    pub const HDMA1: u8 = 0x51; // DMA source high
+    pub const HDMA2: u8 = 0x52; // DMA source low
+    pub const HDMA3: u8 = 0x53; // DMA dest high
+    pub const HDMA4: u8 = 0x54; // DMA dest low
+    pub const HDMA5: u8 = 0x55; // DMA control/trigger
+    pub const RP: u8 = 0x56;    // Infrared (stub)
+    pub const BCPS: u8 = 0x68;  // BG palette index
+    pub const BCPD: u8 = 0x69;  // BG palette data
+    pub const OCPS: u8 = 0x6A;  // OBJ palette index
+    pub const OCPD: u8 = 0x6B;  // OBJ palette data
+    pub const SVBK: u8 = 0x70;  // WRAM bank
 }
 
 /// Debug state for Memory inspection.
@@ -116,12 +132,15 @@ pub struct Memory {
     mbc1_mode: bool, // false = ROM mode, true = RAM mode
 
     // Internal memory
-    vram: [u8; 0x2000], // 0x8000-0x9FFF
-    wram: [u8; 0x2000], // 0xC000-0xDFFF
-    oam: [u8; 0xA0],    // 0xFE00-0xFE9F
-    io: [u8; 0x80],     // 0xFF00-0xFF7F
-    hram: [u8; 0x7F],   // 0xFF80-0xFFFE
-    ie: u8,             // 0xFFFF - Interrupt Enable
+    vram: [[u8; 0x2000]; 2], // 0x8000-0x9FFF; bank 0 = tiles, bank 1 = GBC tile attrs
+    wram: [[u8; 0x1000]; 8], // bank 0 fixed (0xC000-0xCFFF), banks 1-7 switchable (0xD000-0xDFFF)
+    oam: [u8; 0xA0],         // 0xFE00-0xFE9F
+    io: [u8; 0x80],          // 0xFF00-0xFF7F
+    hram: [u8; 0x7F],        // 0xFF80-0xFFFE
+    ie: u8,                  // 0xFFFF - Interrupt Enable
+
+    // GBC-specific state (palette RAM, banking control, double-speed, HDMA)
+    cgb: Cgb,
 
     // Serial output buffer (for test ROM debugging)
     serial_output: Vec<u8>,
@@ -158,12 +177,13 @@ impl Memory {
             ram_enabled: false,
             mbc_type: MbcType::None,
             mbc1_mode: false,
-            vram: [0; 0x2000],
-            wram: [0; 0x2000],
+            vram: [[0; 0x2000]; 2],
+            wram: [[0; 0x1000]; 8],
             oam: [0; 0xA0],
             io: [0; 0x80],
             hram: [0; 0x7F],
             ie: 0,
+            cgb: Cgb::new(),
             serial_output: Vec::new(),
             rtc: Rtc::new(),
             camera_regs: [0; 0x80],
@@ -200,7 +220,7 @@ impl Memory {
         self.io[0x4B] = 0x00; // WX
     }
 
-    pub fn load_rom(&mut self, data: &[u8]) -> Result<(), &'static str> {
+    pub fn load_rom(&mut self, data: &[u8], cgb_mode: bool) -> Result<(), &'static str> {
         if data.len() < 0x150 {
             return Err("ROM too small");
         }
@@ -240,6 +260,17 @@ impl Memory {
             ram_size
         };
 
+        // Reset all hardware state (equivalent to a power cycle)
+        self.vram = [[0; 0x2000]; 2];
+        self.wram = [[0; 0x1000]; 8];
+        self.oam = [0; 0xA0];
+        self.io = [0; 0x80];
+        self.hram = [0; 0x7F];
+        self.ie = 0;
+        self.cgb = Cgb::new();
+        self.cgb.mode = cgb_mode;
+        self.init_io_defaults();
+
         self.cartridge_ram = vec![0; ram_size];
         self.rom = data.to_vec();
         self.rom_bank = 1;
@@ -263,8 +294,8 @@ impl Memory {
                 self.rom.get(offset).copied().unwrap_or(0xFF)
             }
 
-            // Video RAM
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize],
+            // Video RAM (bank selected by VBK register)
+            0x8000..=0x9FFF => self.vram[self.cgb.vram_bank][(addr - 0x8000) as usize],
 
             // External RAM / Camera registers / RTC
             0xA000..=0xBFFF => {
@@ -346,11 +377,13 @@ impl Memory {
                 value
             }
 
-            // Work RAM
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
+            // Work RAM — bank 0 fixed, banks 1-7 switchable
+            0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize],
+            0xD000..=0xDFFF => self.wram[self.cgb.wram_bank][(addr - 0xD000) as usize],
 
-            // Echo RAM
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize],
+            // Echo RAM mirrors 0xC000-0xDDFF
+            0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize],
+            0xF000..=0xFDFF => self.wram[self.cgb.wram_bank][(addr - 0xF000) as usize],
 
             // OAM
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
@@ -451,8 +484,8 @@ impl Memory {
                 _ => {}
             },
 
-            // Video RAM
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize] = value,
+            // Video RAM (bank selected by VBK register)
+            0x8000..=0x9FFF => self.vram[self.cgb.vram_bank][(addr - 0x8000) as usize] = value,
 
             // External RAM / Camera registers / RTC
             0xA000..=0xBFFF => {
@@ -528,11 +561,13 @@ impl Memory {
                 }
             }
 
-            // Work RAM
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize] = value,
+            // Work RAM — bank 0 fixed, banks 1-7 switchable
+            0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize] = value,
+            0xD000..=0xDFFF => self.wram[self.cgb.wram_bank][(addr - 0xD000) as usize] = value,
 
-            // Echo RAM
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize] = value,
+            // Echo RAM mirrors 0xC000-0xDDFF
+            0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize] = value,
+            0xF000..=0xFDFF => self.wram[self.cgb.wram_bank][(addr - 0xF000) as usize] = value,
 
             // OAM
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
@@ -556,6 +591,22 @@ impl Memory {
         let offset = (addr - 0xFF00) as usize;
         match offset {
             0x00 => self.io[0x00] | 0xC0, // JOYP: upper bits always 1
+            // GBC: KEY1 — speed switch register
+            0x4D => (self.cgb.double_speed as u8) << 7 | 0x7E | self.cgb.speed_armed as u8,
+            // GBC: VBK — VRAM bank
+            0x4F => self.cgb.vram_bank as u8 | 0xFE,
+            // GBC: BCPS — BG palette index
+            0x68 => self.cgb.bcps | 0x40,
+            // GBC: BCPD — BG palette data
+            0x69 => self.cgb.bg_palette_ram[(self.cgb.bcps & 0x3F) as usize],
+            // GBC: OCPS — OBJ palette index
+            0x6A => self.cgb.ocps | 0x40,
+            // GBC: OCPD — OBJ palette data
+            0x6B => self.cgb.obj_palette_ram[(self.cgb.ocps & 0x3F) as usize],
+            // GBC: SVBK — WRAM bank
+            0x70 => self.cgb.wram_bank as u8 | 0xF8,
+            // GBC: RP — infrared (stub)
+            0x56 => 0xFF,
             _ => self.io[offset],
         }
     }
@@ -578,6 +629,62 @@ impl Memory {
             0x04 => self.io[0x04] = 0, // DIV: writing any value resets to 0
             0x44 => {}                 // LY: read-only
             0x46 => self.dma_transfer(value),
+            // GBC: KEY1 — arm speed switch
+            0x4D => self.cgb.speed_armed = value & 1 != 0,
+            // GBC: VBK — VRAM bank select
+            0x4F => self.cgb.vram_bank = (value & 1) as usize,
+            // GBC: HDMA1-4 — store source/dest bytes
+            0x51 => self.io[0x51] = value,
+            0x52 => self.io[0x52] = value,
+            0x53 => self.io[0x53] = value,
+            0x54 => self.io[0x54] = value,
+            // GBC: HDMA5 — trigger DMA transfer
+            0x55 => {
+                let source = ((self.io[0x51] as u16) << 8 | self.io[0x52] as u16) & 0xFFF0;
+                let dest = 0x8000u16 | (((self.io[0x53] as u16) << 8 | self.io[0x54] as u16) & 0x1FF0);
+                self.cgb.hdma_source = source;
+                self.cgb.hdma_dest = dest;
+                if value & 0x80 == 0 {
+                    // General-purpose DMA: transfer all blocks at once
+                    let blocks = (value & 0x7F) as u16 + 1;
+                    let total_bytes = blocks * 16;
+                    for i in 0..total_bytes {
+                        let src_byte = self.read(self.cgb.hdma_source + i);
+                        let dest_vram = (self.cgb.hdma_dest & 0x1FFF) + i;
+                        self.vram[self.cgb.vram_bank][dest_vram as usize] = src_byte;
+                    }
+                    self.cgb.hdma_active = false;
+                    self.io[0x55] = 0xFF; // transfer complete
+                } else {
+                    // H-blank DMA: arm for incremental transfer
+                    self.cgb.hdma_len = value & 0x7F;
+                    self.cgb.hdma_active = true;
+                    self.cgb.hdma_hblank = true;
+                    self.io[0x55] = value & 0x7F; // remaining blocks
+                }
+            }
+            // GBC: RP — infrared (stub, ignore writes)
+            0x56 => {}
+            // GBC: BCPS — BG palette index
+            0x68 => self.cgb.bcps = value,
+            // GBC: BCPD — BG palette data with auto-increment
+            0x69 => {
+                self.cgb.bg_palette_ram[(self.cgb.bcps & 0x3F) as usize] = value;
+                if self.cgb.bcps & 0x80 != 0 {
+                    self.cgb.bcps = (self.cgb.bcps & 0x80) | ((self.cgb.bcps + 1) & 0x3F);
+                }
+            }
+            // GBC: OCPS — OBJ palette index
+            0x6A => self.cgb.ocps = value,
+            // GBC: OCPD — OBJ palette data with auto-increment
+            0x6B => {
+                self.cgb.obj_palette_ram[(self.cgb.ocps & 0x3F) as usize] = value;
+                if self.cgb.ocps & 0x80 != 0 {
+                    self.cgb.ocps = (self.cgb.ocps & 0x80) | ((self.cgb.ocps + 1) & 0x3F);
+                }
+            }
+            // GBC: SVBK — WRAM bank select (0 → bank 1)
+            0x70 => self.cgb.wram_bank = ((value & 7) as usize).max(1),
             _ => self.io[offset] = value,
         }
     }
@@ -692,6 +799,66 @@ impl Memory {
     pub fn is_lcd_enabled(&self) -> bool {
         self.io[0x40] & 0x80 != 0
     }
+
+    // ── GBC accessors ────────────────────────────────────────────────────────
+
+    /// Check if GBC mode is active for this ROM session.
+    pub fn is_cgb_mode(&self) -> bool {
+        self.cgb.mode
+    }
+
+    /// Check if double-speed CPU mode is active.
+    pub fn is_double_speed(&self) -> bool {
+        self.cgb.double_speed
+    }
+
+    /// Toggle double-speed mode (called by STOP opcode when KEY1 bit 0 is set).
+    pub fn toggle_double_speed(&mut self) {
+        self.cgb.toggle_double_speed();
+    }
+
+    /// Read a byte directly from a specific VRAM bank (PPU bank-independent access).
+    pub(crate) fn read_vram_bank(&self, bank: usize, addr: u16) -> u8 {
+        if (0x8000..0xA000).contains(&addr) {
+            self.vram[bank & 1][(addr - 0x8000) as usize]
+        } else {
+            0xFF
+        }
+    }
+
+    /// Read two bytes from the BG colour palette RAM (lo, hi) for palette + colour index.
+    #[inline]
+    pub(crate) fn read_bg_palette(&self, palette: usize, color: usize) -> (u8, u8) {
+        self.cgb.read_bg_palette(palette, color)
+    }
+
+    /// Read two bytes from the OBJ colour palette RAM (lo, hi) for palette + colour index.
+    #[inline]
+    pub(crate) fn read_obj_palette(&self, palette: usize, color: usize) -> (u8, u8) {
+        self.cgb.read_obj_palette(palette, color)
+    }
+
+    /// Perform one H-blank HDMA step: transfer 16 bytes from source to VRAM.
+    /// Called by the core once per H-blank if HDMA is active in H-blank mode.
+    pub fn tick_hdma_hblank(&mut self) {
+        if !self.cgb.hdma_active || !self.cgb.hdma_hblank {
+            return;
+        }
+        for i in 0..16u16 {
+            let byte = self.read(self.cgb.hdma_source + i);
+            let dest_vram = (self.cgb.hdma_dest & 0x1FFF) + i;
+            self.vram[self.cgb.vram_bank][dest_vram as usize] = byte;
+        }
+        self.cgb.hdma_source += 16;
+        self.cgb.hdma_dest += 16;
+        if self.cgb.hdma_len == 0 {
+            self.cgb.hdma_active = false;
+            self.io[0x55] = 0xFF; // done
+        } else {
+            self.cgb.hdma_len -= 1;
+            self.io[0x55] = self.cgb.hdma_len; // remaining
+        }
+    }
 }
 
 impl Default for Memory {
@@ -780,7 +947,7 @@ mod tests {
         rom[0x0000] = 0x11; // Bank 0
         rom[0x4000] = 0x22; // Bank 1 at 0x4000
 
-        mem.load_rom(&rom).unwrap();
+        mem.load_rom(&rom, false).unwrap();
 
         // Bank 0 is always at 0x0000-0x3FFF
         assert_eq!(mem.read(0x0000), 0x11);
@@ -800,7 +967,7 @@ mod tests {
         rom[0x8000] = 0x22; // Bank 2
         rom[0xC000] = 0x33; // Bank 3
 
-        mem.load_rom(&rom).unwrap();
+        mem.load_rom(&rom, false).unwrap();
 
         // Select bank 2
         mem.write(0x2000, 0x02);
@@ -874,7 +1041,7 @@ mod tests {
     fn test_load_rom_too_small() {
         let mut mem = Memory::new();
         let small_rom = vec![0u8; 0x100]; // Too small
-        assert!(mem.load_rom(&small_rom).is_err());
+        assert!(mem.load_rom(&small_rom, false).is_err());
     }
 
     #[test]

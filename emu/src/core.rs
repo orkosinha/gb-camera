@@ -75,8 +75,19 @@ impl GameBoyCore {
         }
     }
 
-    pub(crate) fn load_rom(&mut self, rom_data: &[u8]) -> Result<(), &'static str> {
-        self.memory.load_rom(rom_data)
+    pub(crate) fn load_rom(&mut self, rom_data: &[u8], cgb_mode: bool) -> Result<(), &'static str> {
+        // Memory reset first (validates ROM, resets all hardware registers)
+        self.memory.load_rom(rom_data, cgb_mode)?;
+        // Reset remaining components to their power-on state
+        self.cpu.reset(cgb_mode);
+        self.ppu.reset(cgb_mode);
+        self.timer = crate::timer::Timer::new();
+        self.interrupts = crate::interrupts::InterruptController::new();
+        self.joypad = crate::joypad::Joypad::new();
+        self.frame_count = 0;
+        self.total_cycles = 0;
+        self.instruction_count = 0;
+        Ok(())
     }
 
     /// Run one frame of emulation (~16.74ms of Game Boy time).
