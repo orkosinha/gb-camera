@@ -3,6 +3,13 @@
 //! Renders the 160x144 display by cycling through four modes per scanline:
 //! OAM scan, pixel drawing, H-blank, and V-blank. Supports background tiles,
 //! window overlay, and up to 10 sprites per scanline with priority sorting.
+//!
+//! Rendering is split by hardware mode:
+//! - [`dmg`]: original Game Boy grayscale scanline rendering
+//! - [`gbc`]: Game Boy Color colour palette + VRAM banking rendering
+
+mod dmg;
+mod gbc;
 
 use std::fmt;
 
@@ -42,7 +49,7 @@ impl PpuMode {
     }
 }
 
-const SCREEN_WIDTH: usize = 160;
+pub(super) const SCREEN_WIDTH: usize = 160;
 const SCREEN_HEIGHT: usize = 144;
 const VBLANK_LINES: usize = 10;
 const TOTAL_LINES: usize = SCREEN_HEIGHT + VBLANK_LINES;
@@ -64,20 +71,26 @@ const HBLANK_CYCLES: u32 = 204;
 const SCANLINE_CYCLES: u32 = 456;
 
 pub struct Ppu {
-    buffer: Box<[u8; SCREEN_WIDTH * SCREEN_HEIGHT]>,
+    /// RGBA frame buffer — 160×144×4 bytes written directly by render functions.
+    pub(super) buffer: Box<[u8; SCREEN_WIDTH * SCREEN_HEIGHT * 4]>,
+    /// Per-pixel BG info for the current scanline — used for sprite priority.
+    /// Bit 0 = pixel is BG colour 0 (transparent for sprites).
+    /// Bit 1 = tile has GBC force-priority flag set.
+    pub(super) scanline_bg_info: [u8; SCREEN_WIDTH],
     mode: PpuMode,
-    cycles: u32,
-    line: u8,
-    window_line_counter: u8,
+    pub(super) cycles: u32,
+    pub(super) line: u8,
+    pub(super) window_line_counter: u8,
     pub(crate) frame_ready: bool,
     /// GBC colour mode — set once at load_rom time, never changes mid-session.
-    cgb_mode: bool,
+    pub(super) cgb_mode: bool,
 }
 
 impl Ppu {
     pub fn new() -> Self {
         Ppu {
-            buffer: Box::new([0; SCREEN_WIDTH * SCREEN_HEIGHT]),
+            buffer: Box::new([0; SCREEN_WIDTH * SCREEN_HEIGHT * 4]),
+            scanline_bg_info: [0; SCREEN_WIDTH],
             mode: PpuMode::OamScan,
             cycles: 0,
             line: 0,
@@ -102,8 +115,7 @@ impl Ppu {
             self.mode = PpuMode::HBlank;
             self.cycles = 0;
             self.line = 0;
-            memory.write_io_direct(io::LY, 0); // LY = 0
-            // Note: We don't clear the buffer here, so last frame stays visible
+            memory.write_io_direct(io::LY, 0);
             return;
         }
 
@@ -121,10 +133,8 @@ impl Ppu {
                     self.cycles -= DRAWING_CYCLES;
                     self.mode = PpuMode::HBlank;
 
-                    // Render scanline
                     self.render_scanline(memory);
 
-                    // STAT interrupt for HBLANK
                     let stat = memory.read_io_direct(io::STAT);
                     if stat & 0x08 != 0 {
                         interrupts.request(Interrupt::LcdStat, memory);
@@ -137,7 +147,6 @@ impl Ppu {
                     self.line += 1;
                     memory.write_io_direct(io::LY, self.line);
 
-                    // Check LYC coincidence
                     self.check_lyc_coincidence(memory, interrupts);
 
                     if self.line >= SCREEN_HEIGHT as u8 {
@@ -146,7 +155,6 @@ impl Ppu {
                         self.frame_ready = true;
                         interrupts.request(Interrupt::VBlank, memory);
 
-                        // STAT interrupt for VBLANK
                         let stat = memory.read_io_direct(io::STAT);
                         if stat & 0x10 != 0 {
                             interrupts.request(Interrupt::LcdStat, memory);
@@ -154,7 +162,6 @@ impl Ppu {
                     } else {
                         self.mode = PpuMode::OamScan;
 
-                        // STAT interrupt for OAM
                         let stat = memory.read_io_direct(io::STAT);
                         if stat & 0x20 != 0 {
                             interrupts.request(Interrupt::LcdStat, memory);
@@ -171,7 +178,6 @@ impl Ppu {
                         self.line = 0;
                         self.mode = PpuMode::OamScan;
 
-                        // STAT interrupt for OAM
                         let stat = memory.read_io_direct(io::STAT);
                         if stat & 0x20 != 0 {
                             interrupts.request(Interrupt::LcdStat, memory);
@@ -195,12 +201,12 @@ impl Ppu {
         let mut stat = memory.read_io_direct(io::STAT);
 
         if self.line == lyc {
-            stat |= 0x04; // Set coincidence flag
+            stat |= 0x04;
             if stat & 0x40 != 0 {
                 interrupts.request(Interrupt::LcdStat, memory);
             }
         } else {
-            stat &= !0x04; // Clear coincidence flag
+            stat &= !0x04;
         }
 
         memory.write_io_direct(io::STAT, stat);
@@ -214,191 +220,40 @@ impl Ppu {
             return;
         }
 
+        // Default: every pixel treated as BG colour 0 (transparent for sprites)
+        self.scanline_bg_info.fill(0x01);
+
         // Background
         if lcdc & 0x01 != 0 {
-            self.render_background(memory, line);
+            if self.cgb_mode {
+                self.render_background_gbc(memory, line);
+            } else {
+                self.render_background_dmg(memory, line);
+            }
         } else {
-            // Background disabled — clear scanline
-            let start = line * SCREEN_WIDTH;
-            self.buffer[start..start + SCREEN_WIDTH].fill(0);
+            // Background disabled — fill scanline with white
+            let start = line * SCREEN_WIDTH * 4;
+            for px in 0..SCREEN_WIDTH {
+                self.buffer[start + px * 4..start + px * 4 + 4]
+                    .copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+            }
         }
 
-        // Window enabled
+        // Window
         if lcdc & 0x20 != 0 {
-            self.render_window(memory, line);
+            if self.cgb_mode {
+                self.render_window_gbc(memory, line);
+            } else {
+                self.render_window_dmg(memory, line);
+            }
         }
 
-        // Sprites enabled
+        // Sprites
         if lcdc & 0x02 != 0 {
-            self.render_sprites(memory, line);
-        }
-    }
-
-    fn render_background(&mut self, memory: &Memory, line: usize) {
-        let lcdc = memory.read_io_direct(io::LCDC);
-        let scy = memory.read_io_direct(io::SCY) as usize;
-        let scx = memory.read_io_direct(io::SCX) as usize;
-        let bgp = memory.read_io_direct(io::BGP);
-
-        let tile_data_base: u16 = if lcdc & 0x10 != 0 { 0x8000 } else { 0x8800 };
-        let tile_map_base: u16 = if lcdc & 0x08 != 0 { 0x9C00 } else { 0x9800 };
-        let signed_addressing = lcdc & 0x10 == 0;
-
-        let y = (line + scy) & 0xFF;
-        let tile_row = y / 8;
-        let pixel_row = y % 8;
-        let pixel_row_offset = pixel_row as u16 * 2;
-
-        let buf = &mut self.buffer[line * SCREEN_WIDTH..][..SCREEN_WIDTH];
-
-        for (screen_x, buf_elem) in buf.iter_mut().enumerate() {
-            let x = (screen_x + scx) & 0xFF;
-            let tile_col = x >> 3;
-            let pixel_col = 7 - (x & 7);
-
-            let tile_idx = memory.read(tile_map_base + (tile_row * 32 + tile_col) as u16);
-            let tile_data_addr = if signed_addressing {
-                let signed_idx = tile_idx as i8 as i16;
-                (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row_offset as i16) as u16
+            if self.cgb_mode {
+                self.render_sprites_gbc(memory, line);
             } else {
-                tile_data_base + tile_idx as u16 * 16 + pixel_row_offset
-            };
-
-            let low = memory.read(tile_data_addr);
-            let high = memory.read(tile_data_addr + 1);
-
-            let color_idx = ((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1);
-            *buf_elem = (bgp >> (color_idx * 2)) & 0x03;
-        }
-    }
-
-    fn render_window(&mut self, memory: &Memory, line: usize) {
-        let lcdc = memory.read_io_direct(io::LCDC);
-        let wy = memory.read_io_direct(io::WY) as usize;
-        let wx = memory.read_io_direct(io::WX) as i16 - 7;
-        let bgp = memory.read_io_direct(io::BGP);
-
-        if line < wy || wx >= SCREEN_WIDTH as i16 {
-            return;
-        }
-
-        let tile_data_base: u16 = if lcdc & 0x10 != 0 { 0x8000 } else { 0x8800 };
-        let tile_map_base: u16 = if lcdc & 0x40 != 0 { 0x9C00 } else { 0x9800 };
-        let signed_addressing = lcdc & 0x10 == 0;
-
-        let window_y = self.window_line_counter as usize;
-        let tile_row = window_y / 8;
-        let pixel_row = window_y % 8;
-        let pixel_row_offset = pixel_row as u16 * 2;
-
-        let start_x = wx.max(0) as usize;
-        let buf = &mut self.buffer[line * SCREEN_WIDTH..][..SCREEN_WIDTH];
-
-        for (screen_x, buf_elem) in buf.iter_mut().enumerate().skip(start_x) {
-            let window_x = (screen_x as i16 - wx) as usize;
-            let tile_col = window_x >> 3;
-            let pixel_col = 7 - (window_x & 7);
-
-            let tile_idx = memory.read(tile_map_base + (tile_row * 32 + tile_col) as u16);
-
-            let tile_data_addr = if signed_addressing {
-                let signed_idx = tile_idx as i8 as i16;
-                (tile_data_base as i16 + 0x800 + signed_idx * 16 + pixel_row_offset as i16) as u16
-            } else {
-                tile_data_base + tile_idx as u16 * 16 + pixel_row_offset
-            };
-
-            let low = memory.read(tile_data_addr);
-            let high = memory.read(tile_data_addr + 1);
-
-            let color_idx = ((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1);
-            *buf_elem = (bgp >> (color_idx * 2)) & 0x03;
-        }
-
-        self.window_line_counter += 1;
-    }
-
-    fn render_sprites(&mut self, memory: &Memory, line: usize) {
-        let lcdc = memory.read_io_direct(io::LCDC);
-        let sprite_height: i16 = if lcdc & 0x04 != 0 { 16 } else { 8 };
-        let oam = memory.get_oam();
-
-        // Cache palette registers outside the sprite loop
-        let obp0 = memory.read_io_direct(io::OBP0);
-        let obp1 = memory.read_io_direct(io::OBP1);
-
-        // Collect sprites on this line (max 10, stack-allocated)
-        let mut sprites: [(u8, i16, u8, u8); 10] = [(0, 0, 0, 0); 10];
-        let mut sprite_count: usize = 0;
-
-        for i in 0..40 {
-            let offset = i * 4;
-            let oam_y = oam[offset] as i16;
-            let screen_y = oam_y - 16;
-            let x = oam[offset + 1];
-            let tile = oam[offset + 2];
-            let flags = oam[offset + 3];
-
-            if (line as i16) >= screen_y && (line as i16) < screen_y + sprite_height {
-                sprites[sprite_count] = (x, screen_y, tile, flags);
-                sprite_count += 1;
-                if sprite_count >= 10 {
-                    break;
-                }
-            }
-        }
-
-        // Sort by X coordinate (lower X = higher priority)
-        sprites[..sprite_count].sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Render sprites (reverse order so higher priority overwrites)
-        for &(x, screen_y, mut tile, flags) in sprites[..sprite_count].iter().rev() {
-            let palette = if flags & 0x10 != 0 { obp1 } else { obp0 };
-
-            let flip_x = flags & 0x20 != 0;
-            let flip_y = flags & 0x40 != 0;
-            let bg_priority = flags & 0x80 != 0;
-
-            let mut sprite_row = (line as i16) - screen_y;
-            if flip_y {
-                sprite_row = sprite_height - 1 - sprite_row;
-            }
-
-            // For 8x16 sprites, adjust tile index
-            if sprite_height == 16 {
-                tile &= 0xFE;
-                if sprite_row >= 8 {
-                    tile += 1;
-                    sprite_row -= 8;
-                }
-            }
-
-            let tile_addr = 0x8000 + tile as u16 * 16 + sprite_row as u16 * 2;
-            let low = memory.read(tile_addr);
-            let high = memory.read(tile_addr + 1);
-
-            for pixel in 0..8i16 {
-                let screen_x = x as i16 - 8 + pixel;
-                if screen_x < 0 || screen_x >= SCREEN_WIDTH as i16 {
-                    continue;
-                }
-
-                let bit = if flip_x { pixel } else { 7 - pixel };
-                let color_idx = ((high >> bit) & 1) << 1 | ((low >> bit) & 1);
-
-                // Color 0 is transparent for sprites
-                if color_idx == 0 {
-                    continue;
-                }
-
-                let buffer_idx = line * SCREEN_WIDTH + screen_x as usize;
-
-                // BG priority: sprite only shows over BG color 0
-                if bg_priority && self.buffer[buffer_idx] != 0 {
-                    continue;
-                }
-
-                self.buffer[buffer_idx] = (palette >> (color_idx * 2)) & 0x03;
+                self.render_sprites_dmg(memory, line);
             }
         }
     }
@@ -426,7 +281,7 @@ impl Ppu {
         }
     }
 
-    /// Count non-zero pixels in the buffer.
+    /// Count non-zero bytes in the buffer (useful for debug/test assertions).
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: log_frame_debug
     pub fn count_non_zero_pixels(&self) -> usize {
         self.buffer.iter().filter(|&&p| p != 0).count()
@@ -454,6 +309,6 @@ mod tests {
     #[test]
     fn test_buffer_size() {
         let ppu = Ppu::new();
-        assert_eq!(ppu.get_buffer().len(), SCREEN_WIDTH * SCREEN_HEIGHT);
+        assert_eq!(ppu.get_buffer().len(), SCREEN_WIDTH * SCREEN_HEIGHT * 4);
     }
 }

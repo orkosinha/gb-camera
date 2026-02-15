@@ -143,18 +143,8 @@ impl GameBoyCore {
     }
 
     fn render_frame(&mut self) {
-        let ppu_buffer = self.ppu.get_buffer();
-        let palette = [0xFFu8, 0xAA, 0x55, 0x00];
-        let back = self.frame_buffer.back_mut();
-
-        for (i, &pixel) in ppu_buffer.iter().enumerate() {
-            let gray = palette[(pixel & 0x03) as usize];
-            let offset = i * 4;
-            back[offset] = gray;
-            back[offset + 1] = gray;
-            back[offset + 2] = gray;
-            back[offset + 3] = 255;
-        }
+        // PPU writes RGBA directly — just copy the completed scanlines into the front buffer.
+        self.frame_buffer.back_mut().copy_from_slice(self.ppu.get_buffer());
         self.frame_buffer.swap();
     }
 
