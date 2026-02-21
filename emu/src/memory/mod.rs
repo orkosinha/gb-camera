@@ -1065,4 +1065,137 @@ mod tests {
         assert_eq!(mem2.read(0xA000), 0x42);
         assert_eq!(mem2.read(0xA001), 0x43);
     }
+
+    #[test]
+    fn test_cgb_load_rom_sets_mode() {
+        let mut mem = Memory::new();
+        let rom = vec![0u8; 0x8000];
+        mem.load_rom(&rom, true).unwrap();
+        assert!(mem.is_cgb_mode());
+
+        mem.load_rom(&rom, false).unwrap();
+        assert!(!mem.is_cgb_mode());
+    }
+
+    #[test]
+    fn test_cgb_vram_bank_switching() {
+        let mut mem = Memory::new();
+
+        // Bank 0 is active by default
+        mem.write(0x8000, 0xAA);
+        assert_eq!(mem.read(0x8000), 0xAA);
+
+        // Switch to bank 1 via VBK register
+        mem.write(0xFF4F, 0x01);
+        assert_eq!(mem.read(0xFF4F), 0xFF); // bit 0 set, other bits = 1
+
+        // Write distinct value in bank 1
+        mem.write(0x8000, 0xBB);
+        assert_eq!(mem.read(0x8000), 0xBB);
+
+        // Switch back to bank 0 — original value preserved
+        mem.write(0xFF4F, 0x00);
+        assert_eq!(mem.read(0x8000), 0xAA);
+
+        // Direct bank read confirms isolation
+        assert_eq!(mem.read_vram_bank(0, 0x8000), 0xAA);
+        assert_eq!(mem.read_vram_bank(1, 0x8000), 0xBB);
+    }
+
+    #[test]
+    fn test_cgb_wram_bank_switching() {
+        let mut mem = Memory::new();
+
+        // Bank 0 is fixed at 0xC000-0xCFFF
+        mem.write(0xC100, 0x11);
+
+        // Default switchable bank is 1
+        mem.write(0xD000, 0x22);
+
+        // Switch to bank 3 via SVBK
+        mem.write(0xFF70, 0x03);
+        assert_eq!(mem.read(0xFF70), 0x03 | 0xF8); // lower 3 bits set, upper 5 = 1
+
+        mem.write(0xD000, 0x33);
+        assert_eq!(mem.read(0xD000), 0x33);
+
+        // Switch back to bank 1 — original value preserved
+        mem.write(0xFF70, 0x01);
+        assert_eq!(mem.read(0xD000), 0x22);
+
+        // Bank 0 is unaffected
+        assert_eq!(mem.read(0xC100), 0x11);
+    }
+
+    #[test]
+    fn test_cgb_bg_palette_write_read() {
+        let mut mem = Memory::new();
+
+        // Set BCPS to address 0 (no auto-increment)
+        mem.write(0xFF68, 0x00);
+        // Write lo byte of white (RGB555 white lo = 0xFF)
+        mem.write(0xFF69, 0xFF);
+        // Advance to next byte manually
+        mem.write(0xFF68, 0x01);
+        // Write hi byte of white (RGB555 white hi = 0x7F)
+        mem.write(0xFF69, 0x7F);
+
+        // read_bg_palette(0, 0) should return (0xFF, 0x7F)
+        let (lo, hi) = mem.read_bg_palette(0, 0);
+        assert_eq!(lo, 0xFF, "palette lo byte");
+        assert_eq!(hi, 0x7F, "palette hi byte");
+    }
+
+    #[test]
+    fn test_cgb_obj_palette_auto_increment() {
+        let mut mem = Memory::new();
+
+        // OCPS = 0x80 enables auto-increment starting at address 0
+        mem.write(0xFF6A, 0x80);
+
+        // Write 8 bytes (4 colours × 2 bytes) for OBJ palette 0
+        let bytes = [0x00u8, 0x00, 0xFF, 0x7F, 0x1F, 0x00, 0xFF, 0x00];
+        for b in bytes {
+            mem.write(0xFF6B, b);
+        }
+
+        // Address should have auto-incremented to 8
+        let ocps = mem.read(0xFF6A);
+        assert_eq!(ocps & 0x3F, 8, "OCPS address after 8 auto-increments");
+
+        // Verify palette 0 colour 1 = white (0xFF, 0x7F)
+        let (lo, hi) = mem.read_obj_palette(0, 1);
+        assert_eq!(lo, 0xFF);
+        assert_eq!(hi, 0x7F);
+    }
+
+    #[test]
+    fn test_cgb_key1_arm_and_toggle() {
+        let mut mem = Memory::new();
+
+        // Initially not armed, not double speed
+        assert!(!mem.is_double_speed());
+        let key1 = mem.read(0xFF4D);
+        assert_eq!(key1 & 0x01, 0, "speed_armed initially clear");
+        assert_eq!(key1 & 0x80, 0, "double_speed initially clear");
+
+        // Arm the speed switch
+        mem.write(0xFF4D, 0x01);
+        let key1 = mem.read(0xFF4D);
+        assert_eq!(key1 & 0x01, 1, "speed_armed set");
+        assert!(!mem.is_double_speed());
+
+        // Toggle (simulates STOP execution)
+        mem.toggle_double_speed();
+        assert!(mem.is_double_speed(), "now in double speed");
+
+        let key1 = mem.read(0xFF4D);
+        assert_eq!(key1 & 0x80, 0x80, "bit 7 reflects double_speed");
+        assert_eq!(key1 & 0x01, 0, "speed_armed cleared after toggle");
+
+        // Toggle again → back to normal speed
+        mem.write(0xFF4D, 0x01); // re-arm
+        mem.toggle_double_speed();
+        assert!(!mem.is_double_speed());
+    }
 }

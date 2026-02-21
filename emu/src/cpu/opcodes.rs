@@ -1073,9 +1073,15 @@ impl Cpu {
                 4
             } // HALT
             0x10 => {
-                self.fetch(bus);
+                self.fetch(bus); // consume the mandatory 0x00 operand
+                // In GBC mode, STOP with KEY1 armed triggers CPU speed switch
+                if bus.read_io_direct(crate::memory::io::KEY1) & 0x01 != 0 {
+                    bus.memory_mut().toggle_double_speed();
+                } else {
+                    self.halted = true;
+                }
                 4
-            } // STOP (skip next byte)
+            } // STOP / speed switch
             0xF3 => {
                 self.ime = false;
                 4

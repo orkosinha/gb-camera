@@ -55,7 +55,7 @@ async function main() {
 
     // Create fresh emulator instance
     state.emulator = new GameBoy();
-    state.emulator.load_rom(data);
+    state.emulator.load_rom(data, name.endsWith(".gbc"));
 
     $("rom-name").textContent = name;
     state.currentRomName = name.replace(/\.(gb|gbc|bin|rom)$/i, "");

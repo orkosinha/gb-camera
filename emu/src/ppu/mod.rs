@@ -6,10 +6,10 @@
 //!
 //! Rendering is split by hardware mode:
 //! - [`dmg`]: original Game Boy grayscale scanline rendering
-//! - [`gbc`]: Game Boy Color colour palette + VRAM banking rendering
+//! - [`cgb`]: Game Boy Color colour palette + VRAM banking rendering
 
+mod cgb;
 mod dmg;
-mod gbc;
 
 use std::fmt;
 
@@ -82,6 +82,9 @@ pub struct Ppu {
     pub(super) line: u8,
     pub(super) window_line_counter: u8,
     pub(crate) frame_ready: bool,
+    /// Set to true for one tick whenever the PPU transitions Drawing → HBlank.
+    /// Consumed by the core to trigger an H-blank HDMA step.
+    hblank_this_tick: bool,
     /// GBC colour mode — set once at load_rom time, never changes mid-session.
     pub(super) cgb_mode: bool,
 }
@@ -96,6 +99,7 @@ impl Ppu {
             line: 0,
             window_line_counter: 0,
             frame_ready: false,
+            hblank_this_tick: false,
             cgb_mode: false,
         }
     }
@@ -132,6 +136,7 @@ impl Ppu {
                 if self.cycles >= DRAWING_CYCLES {
                     self.cycles -= DRAWING_CYCLES;
                     self.mode = PpuMode::HBlank;
+                    self.hblank_this_tick = true;
 
                     self.render_scanline(memory);
 
@@ -258,6 +263,14 @@ impl Ppu {
         }
     }
 
+    /// Returns true (and clears the flag) if the PPU entered H-blank this tick.
+    /// Used by the core to trigger H-blank HDMA transfers.
+    pub fn took_hblank_step(&mut self) -> bool {
+        let v = self.hblank_this_tick;
+        self.hblank_this_tick = false;
+        v
+    }
+
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: step_single
     pub fn frame_ready(&mut self) -> bool {
         let r = self.frame_ready;
@@ -310,5 +323,79 @@ mod tests {
     fn test_buffer_size() {
         let ppu = Ppu::new();
         assert_eq!(ppu.get_buffer().len(), SCREEN_WIDTH * SCREEN_HEIGHT * 4);
+    }
+
+    #[test]
+    fn test_reset_dmg_mode() {
+        let mut ppu = Ppu::new();
+        ppu.reset(false);
+        assert!(!ppu.cgb_mode);
+        assert_eq!(ppu.get_buffer().len(), SCREEN_WIDTH * SCREEN_HEIGHT * 4);
+    }
+
+    #[test]
+    fn test_reset_cgb_mode() {
+        let mut ppu = Ppu::new();
+        ppu.reset(true);
+        assert!(ppu.cgb_mode);
+        // Buffer size is the same regardless of mode
+        assert_eq!(ppu.get_buffer().len(), SCREEN_WIDTH * SCREEN_HEIGHT * 4);
+    }
+
+    #[test]
+    fn test_reset_clears_state() {
+        let mut ppu = Ppu::new();
+        ppu.cgb_mode = true;
+        ppu.line = 100;
+        ppu.cycles = 999;
+        ppu.window_line_counter = 12;
+        ppu.reset(false);
+        assert_eq!(ppu.line, 0);
+        assert_eq!(ppu.cycles, 0);
+        assert_eq!(ppu.window_line_counter, 0);
+        assert!(!ppu.cgb_mode);
+    }
+
+    #[test]
+    fn test_frame_ready_clears_on_read() {
+        let mut ppu = Ppu::new();
+        ppu.frame_ready = true;
+        assert!(ppu.frame_ready());
+        assert!(!ppu.frame_ready(), "flag must clear after first read");
+    }
+
+    #[test]
+    fn test_rgb555_black() {
+        let rgba = Ppu::rgb555_to_rgba(0x00, 0x00);
+        assert_eq!(rgba, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_rgb555_white() {
+        // RGB555 white: R=31 G=31 B=31
+        // lo = 0xFF (R[4:0]=11111, G[2:0]=111 in bits 7:5)
+        // hi = 0x7F (G[4:3]=11 in bits 1:0, B[4:0]=11111 in bits 6:2)
+        let rgba = Ppu::rgb555_to_rgba(0xFF, 0x7F);
+        assert_eq!(rgba, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn test_rgb555_pure_red() {
+        // R=31, G=0, B=0 → lo = 0x1F, hi = 0x00
+        let rgba = Ppu::rgb555_to_rgba(0x1F, 0x00);
+        assert_eq!(rgba[0], 0xFF, "red channel");
+        assert_eq!(rgba[1], 0x00, "green channel");
+        assert_eq!(rgba[2], 0x00, "blue channel");
+        assert_eq!(rgba[3], 0xFF, "alpha");
+    }
+
+    #[test]
+    fn test_rgb555_pure_blue() {
+        // R=0, G=0, B=31 → lo = 0x00, hi = 0x7C (B[4:0]=11111 in bits 6:2)
+        let rgba = Ppu::rgb555_to_rgba(0x00, 0x7C);
+        assert_eq!(rgba[0], 0x00, "red");
+        assert_eq!(rgba[1], 0x00, "green");
+        assert_eq!(rgba[2], 0xFF, "blue");
+        assert_eq!(rgba[3], 0xFF, "alpha");
     }
 }

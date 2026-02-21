@@ -11,7 +11,8 @@ use crate::memory::Memory;
 use crate::ppu::Ppu;
 use crate::timer::Timer;
 
-const CYCLES_PER_FRAME: u32 = 70224;
+const CYCLES_PER_FRAME: u32 = 70_224;
+const CYCLES_PER_FRAME_DOUBLE: u32 = 140_448; // CPU runs 2× but PPU timing unchanged
 const FRAME_BUFFER_SIZE: usize = 160 * 144 * 4;
 const CAMERA_BUFFER_SIZE: usize = 128 * 112 * 4;
 
@@ -96,7 +97,12 @@ impl GameBoyCore {
         let mut cycles_elapsed: u32 = 0;
         let mut instructions_this_frame: u32 = 0;
 
-        while cycles_elapsed < CYCLES_PER_FRAME {
+        let cycles_per_frame = if self.memory.is_double_speed() {
+            CYCLES_PER_FRAME_DOUBLE
+        } else {
+            CYCLES_PER_FRAME
+        };
+        while cycles_elapsed < cycles_per_frame {
             let cycles = {
                 let mut bus = MemoryBus::new(&mut self.memory, &mut self.timer, &mut self.joypad);
                 self.cpu.step(&mut bus, &mut self.interrupts)
@@ -104,6 +110,9 @@ impl GameBoyCore {
 
             self.timer.tick(cycles, &mut self.memory, &self.interrupts);
             self.ppu.tick(cycles, &mut self.memory, &self.interrupts);
+            if self.ppu.took_hblank_step() {
+                self.memory.tick_hdma_hblank();
+            }
 
             cycles_elapsed += cycles;
             instructions_this_frame += 1;
@@ -130,6 +139,9 @@ impl GameBoyCore {
 
         self.timer.tick(cycles, &mut self.memory, &self.interrupts);
         self.ppu.tick(cycles, &mut self.memory, &self.interrupts);
+        if self.ppu.took_hblank_step() {
+            self.memory.tick_hdma_hblank();
+        }
 
         self.total_cycles += cycles as u64;
         self.instruction_count += 1;
