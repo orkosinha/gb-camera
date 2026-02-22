@@ -411,6 +411,20 @@ impl GameBoy {
         self.core.memory.read_io_direct(io::JOYP)
     }
 
+    // ── MBC7 accelerometer ───────────────────────────────────────────────────
+
+    pub fn is_mbc7(&self) -> bool {
+        self.core.memory.get_mbc_type() == crate::memory::MbcType::Mbc7
+    }
+
+    /// Feed a new tilt reading for MBC7 (Kirby's Tilt 'n' Tumble).
+    ///
+    /// `x` and `y` are signed offsets from flat (0 = no tilt).
+    /// Scale: ±0x1000 ≈ ±1g. The WASM host converts DeviceMotion m/s² to this unit.
+    pub fn set_accelerometer(&mut self, x: i32, y: i32) {
+        self.core.memory.set_accelerometer(x, y);
+    }
+
     // ── GBC registers ────────────────────────────────────────────────────────
 
     pub fn is_cgb_mode(&self) -> bool {
@@ -431,6 +445,26 @@ impl GameBoy {
     pub fn io_svbk(&self) -> u8 {
         let v = self.core.memory.read(0xFF70) & 0x07;
         if v == 0 { 1 } else { v }
+    }
+
+    /// BCPS: BG palette index register (bit 7 = auto-increment, bits 5–0 = byte address).
+    pub fn io_bcps(&self) -> u8 {
+        self.core.memory.read(0xFF68)
+    }
+
+    /// OCPS: OBJ palette index register (same layout as BCPS).
+    pub fn io_ocps(&self) -> u8 {
+        self.core.memory.read(0xFF6A)
+    }
+
+    /// OPRI: Object priority mode (bit 0: 0 = CGB coordinate order, 1 = DMG OAM order).
+    pub fn io_opri(&self) -> u8 {
+        self.core.memory.read(0xFF6C)
+    }
+
+    /// HDMA5: DMA status — 0xFF = idle; otherwise H-blank DMA active, bits 6–0 = remaining blocks − 1.
+    pub fn io_hdma5(&self) -> u8 {
+        self.core.memory.read(0xFF55)
     }
 
     /// Colour of `color` (0–3) in BG `palette` (0–7) as 0xRRGGBB.

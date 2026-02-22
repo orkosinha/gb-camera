@@ -708,6 +708,16 @@ impl Memory {
             .map(|c| c.photo_count())
             .unwrap_or(0)
     }
+
+    // ── MBC7 accelerometer accessor ──────────────────────────────────────────
+
+    /// Feed accelerometer data to an MBC7 cartridge (Kirby's Tilt 'n' Tumble).
+    /// No-op for all other cartridge types.
+    pub fn set_accelerometer(&mut self, x: i32, y: i32) {
+        if let Some(m) = self.cartridge.as_mbc7_mut() {
+            m.set_accelerometer(x, y);
+        }
+    }
 }
 
 impl Default for Memory {

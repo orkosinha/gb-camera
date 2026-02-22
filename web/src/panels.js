@@ -64,15 +64,32 @@ export function createPanels(state, dom) {
         $('r-wy').textContent = hex2(e.io_wy());
 
         // Mode badge + conditional rows
-        $('cgb-badge').style.display = cgb ? '' : 'none';
-        $('row-dmg-pal').style.display = cgb ? 'none' : '';
-        $('row-cgb-regs').style.display = cgb ? '' : 'none';
-        $('cgb-palettes').style.display = cgb ? '' : 'none';
+        $('cgb-badge').style.display     = cgb ? '' : 'none';
+        $('row-dmg-pal').style.display   = cgb ? 'none' : '';
+        $('row-cgb-regs').style.display  = cgb ? '' : 'none';
+        $('row-cgb-pal-idx').style.display = cgb ? '' : 'none';
+        $('cgb-palettes').style.display  = cgb ? '' : 'none';
 
         if (cgb) {
+            // Banking + speed
             $('r-vbk').textContent  = String(e.io_vbk());
             $('r-svbk').textContent = String(e.io_svbk());
-            $('r-key1').textContent = hex2(e.io_key1());
+            const key1 = e.io_key1();
+            $('r-key1').textContent = hex2(key1) + ((key1 & 0x80) ? ' 2x' : ' 1x');
+            $('r-opri').textContent = (e.io_opri() & 1) ? 'OAM' : 'XY';
+
+            // Palette index registers
+            const bcps = e.io_bcps();
+            const ocps = e.io_ocps();
+            $('r-bcps').textContent = hex2(bcps & 0x3F) + ((bcps & 0x80) ? '+' : '');
+            $('r-ocps').textContent = hex2(ocps & 0x3F) + ((ocps & 0x80) ? '+' : '');
+
+            // HDMA5 status
+            const hdma5 = e.io_hdma5();
+            $('r-hdma5').textContent = hdma5 === 0xFF
+                ? 'idle'
+                : `HBL ${(hdma5 & 0x7F) + 1}blk`;
+
             drawPaletteCanvas('cgb-bg-pal',  (p, c) => e.get_bg_palette_color(p, c));
             drawPaletteCanvas('cgb-obj-pal', (p, c) => e.get_obj_palette_color(p, c));
         } else {

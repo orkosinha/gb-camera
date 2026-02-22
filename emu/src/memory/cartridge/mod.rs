@@ -8,12 +8,14 @@ mod camera;
 mod mbc1;
 mod mbc3;
 mod mbc5;
+mod mbc7;
 mod none;
 
 pub use camera::PocketCamera;
 pub use mbc1::Mbc1;
 pub use mbc3::Mbc3;
 pub use mbc5::Mbc5;
+pub use mbc7::Mbc7;
 pub use none::NoMbc;
 
 use super::camera::Camera;
@@ -25,6 +27,7 @@ pub enum MbcType {
     Mbc1,         // MBC1
     Mbc3,         // MBC3 (with RTC support)
     Mbc5,         // MBC5
+    Mbc7,         // MBC7 (accelerometer + EEPROM; Kirby's Tilt 'n' Tumble)
     PocketCamera, // Game Boy Camera (0xFC)
 }
 
@@ -70,6 +73,10 @@ pub trait Cartridge {
     fn as_camera_mut(&mut self) -> Option<&mut Camera> {
         None
     }
+    /// Return inner `Mbc7` mutably (for accelerometer input). Default: None.
+    fn as_mbc7_mut(&mut self) -> Option<&mut Mbc7> {
+        None
+    }
 }
 
 /// Determine RAM size from cartridge header byte 0x0149.
@@ -92,7 +99,8 @@ pub fn make_cartridge(rom: Vec<u8>, cart_type: u8, ram_size: usize) -> Box<dyn C
         0x01..=0x03 => Box::new(Mbc1::new(rom, ram_size)),
         0x0F..=0x13 => Box::new(Mbc3::new(rom, ram_size)),
         0x19..=0x1E => Box::new(Mbc5::new(rom, ram_size)),
-        0xFC => Box::new(PocketCamera::new(rom)),
+        0x22        => Box::new(Mbc7::new(rom)),
+        0xFC        => Box::new(PocketCamera::new(rom)),
         _ => Box::new(Mbc5::new(rom, ram_size)), // safe default for unknown types
     }
 }

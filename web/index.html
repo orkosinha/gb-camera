@@ -250,6 +250,36 @@
             #panel-camera {
                 display: none;
             }
+
+            /* Motion (MBC7) */
+            #panel-motion {
+                display: none;
+            }
+            #motion-status {
+                font-size: 11px;
+                color: #888;
+                margin-bottom: 6px;
+            }
+            #tilt-indicator {
+                width: 80px;
+                height: 80px;
+                border: 1px solid var(--border);
+                border-radius: 50%;
+                position: relative;
+                margin: 6px 0;
+                background: #0a0a0a;
+            }
+            #tilt-dot {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                background: var(--gold);
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                transition: top 0.05s, left 0.05s;
+            }
             #camera-settings {
                 font-size: 11px;
                 color: #888;
@@ -592,6 +622,17 @@
                                 ><span class="val" id="r-svbk">1</span>
                                 <span class="lbl">KEY1</span
                                 ><span class="val" id="r-key1">00</span>
+                                <span class="lbl">OPRI</span
+                                ><span class="val" id="r-opri">00</span>
+                            </div>
+                            <!-- GBC palette index registers -->
+                            <div class="row" id="row-cgb-pal-idx" style="display:none">
+                                <span class="lbl">BCPS</span
+                                ><span class="val" id="r-bcps">00</span>
+                                <span class="lbl">OCPS</span
+                                ><span class="val" id="r-ocps">00</span>
+                                <span class="lbl">HDMA5</span
+                                ><span class="val" id="r-hdma5">idle</span>
                                 <span class="lbl"></span
                                 ><span class="val"></span>
                             </div>
@@ -705,6 +746,21 @@
                         </div>
                         <div class="sub">Serial</div>
                         <pre id="serial-output"></pre>
+                    </div>
+                </div>
+
+                <div class="panel" id="panel-motion">
+                    <div
+                        class="panel-head"
+                        onclick="this.parentElement.classList.toggle('shut')"
+                    >
+                        Accelerometer
+                    </div>
+                    <div class="panel-body">
+                        <div id="motion-status">Accelerometer disabled</div>
+                        <div id="tilt-indicator"><div id="tilt-dot"></div></div>
+                        <button id="btn-motion-toggle">Enable Accelerometer</button>
+                        <div class="sub" style="margin-top:6px">Desktop: drag on screen to simulate tilt</div>
                     </div>
                 </div>
 

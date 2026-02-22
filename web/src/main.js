@@ -6,6 +6,7 @@ import { createPanels } from "./panels.js";
 import { createInput } from "./input.js";
 import { createCamera } from "./camera.js";
 import { createSave } from "./save.js";
+import { createMotion } from "./motion.js";
 
 const state = {
   emulator: null,
@@ -18,6 +19,7 @@ const state = {
   memViewAddr: 0x0000,
   currentRomName: "game",
   isGameBoyCamera: false,
+  isMbc7: false,
 };
 
 async function main() {
@@ -26,8 +28,9 @@ async function main() {
 
   // DOM
   const $ = (id) => document.getElementById(id);
-  const frameInfo = $("frame-info");
+  const frameInfo  = $("frame-info");
   const cameraPanel = $("panel-camera");
+  const motionPanel = $("panel-motion");
 
   // Modules
   const renderer = createRenderer(state, $("screen"), $("tile-canvas"));
@@ -48,6 +51,17 @@ async function main() {
   });
   const save = createSave(state);
 
+  // MBC7 accelerometer input
+  const tiltDot = $("tilt-dot");
+  const motion = createMotion((x, y) => {
+    if (state.emulator && state.isMbc7) state.emulator.set_accelerometer(x, y);
+    // Update visual indicator: map ±MAX (0x3000) to ±35px from centre
+    const px = 50 + (x / 0x3000) * 35;
+    const py = 50 + (y / 0x3000) * 35;
+    tiltDot.style.left = `${px.toFixed(1)}%`;
+    tiltDot.style.top  = `${py.toFixed(1)}%`;
+  });
+
   // Load ROM helper
   async function loadRom(data, name) {
     // Stop camera before loading new ROM (clean up intervals, etc.)
@@ -67,6 +81,10 @@ async function main() {
 
     const cartType = data.length >= 0x148 ? data[0x147] : 0;
     state.isGameBoyCamera = cartType === 0xfc;
+    state.isMbc7          = cartType === 0x22;
+
+    // Stop any active motion tracking when loading a new ROM
+    motion.disable();
 
     if (state.isGameBoyCamera) {
       cameraPanel.style.display = "block";
@@ -75,6 +93,19 @@ async function main() {
       if (camera.isWebcamEnabled()) camera.captureFrame();
     } else {
       cameraPanel.style.display = "none";
+    }
+
+    motionPanel.style.display = state.isMbc7 ? "block" : "none";
+    if (state.isMbc7) {
+      // Auto-enable accelerometer on MBC7 detection
+      const ok = await motion.enableMotion();
+      if (ok) {
+        $("motion-status").textContent = motion.isMouse() ? "Mouse drag active" : "Accelerometer active";
+      } else {
+        motion.enableMouse($("screen"));
+        $("motion-status").textContent = "Mouse drag active";
+      }
+      $("btn-motion-toggle").textContent = "Disable Accelerometer";
     }
 
     renderer.renderScreen();
@@ -162,6 +193,26 @@ async function main() {
   // Camera
   $("btn-webcam-toggle").onclick = () => {
     camera.isWebcamEnabled() ? camera.stopWebcam() : camera.initWebcam();
+  };
+
+  // MBC7 accelerometer
+  $("btn-motion-toggle").onclick = async () => {
+    if (motion.isEnabled()) {
+      motion.disable();
+      $("motion-status").textContent = "Accelerometer disabled";
+      $("btn-motion-toggle").textContent = "Enable Accelerometer";
+    } else {
+      // Try real motion first; fall back to mouse drag on desktop
+      const ok = await motion.enableMotion();
+      if (ok) {
+        $("motion-status").textContent = motion.isMouse()
+          ? "Mouse drag active" : "Motion active";
+      } else {
+        motion.enableMouse($("screen"));
+        $("motion-status").textContent = "Mouse drag active";
+      }
+      $("btn-motion-toggle").textContent = "Disable Accelerometer";
+    }
   };
 
   // Save/Load
