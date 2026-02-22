@@ -337,6 +337,22 @@ impl GameBoy {
         data
     }
 
+    /// Read bytes from VRAM at address `addr` (0x8000–0x9FFF) from an explicit bank (0 or 1).
+    /// Does not modify the emulator's VBK register — safe to call at any time.
+    pub fn read_vram_bank(&self, bank: u8, addr: u16, len: u16) -> Vec<u8> {
+        let bank = (bank & 1) as usize;
+        (0..len as u32)
+            .map(|i| {
+                let a = addr.wrapping_add(i as u16);
+                if (0x8000..=0x9FFF).contains(&a) {
+                    self.core.memory.read_vram_bank(bank, a)
+                } else {
+                    0xFF
+                }
+            })
+            .collect()
+    }
+
     // IO registers
 
     pub fn io_lcdc(&self) -> u8 {

@@ -64,7 +64,8 @@ export function createPanels(state, dom) {
         $('r-wy').textContent = hex2(e.io_wy());
 
         // Mode badge + conditional rows
-        $('cgb-badge').style.display     = cgb ? '' : 'none';
+        $('cgb-badge').style.display      = cgb ? '' : 'none';
+        $('cgb-badge-vram').style.display = cgb ? '' : 'none';
         $('row-dmg-pal').style.display   = cgb ? 'none' : '';
         $('row-cgb-regs').style.display  = cgb ? '' : 'none';
         $('row-cgb-pal-idx').style.display = cgb ? '' : 'none';

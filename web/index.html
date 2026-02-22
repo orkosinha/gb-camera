@@ -100,21 +100,60 @@
             }
 
             #panel-tiles canvas {
-                width: 100%;
-                max-width: 256px;
-                height: auto;
                 image-rendering: pixelated;
                 background: #000;
                 border: 1px solid var(--border);
+                display: block;
+                height: 256px;
+                width: auto;
+            }
+            .vram-sections {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: flex-start;
+                overflow-x: auto;
+            }
+            .vram-section {
+                flex: 0 0 auto;
+            }
+            #tile-bank-select {
+                display: flex;
+                gap: 4px;
+                margin-bottom: 4px;
+            }
+            #tile-bank-select button {
+                padding: 2px 8px;
+                font-size: 10px;
+                letter-spacing: 1px;
+            }
+            #tile-bank-select button.active-bank {
+                background: var(--gold);
+                color: #000;
+                border-color: var(--gold);
             }
 
-            /* Right column: Panels */
+            /* Right column: 2-column grid of panels */
             #col-right {
                 overflow-y: auto;
                 padding: 8px;
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+                align-content: start;
+            }
+
+            /* Full-width panel spanning both columns */
+            .panel-full {
+                grid-column: 1 / -1;
+            }
+
+            /* Sub-column: stacks panels vertically */
+            .panel-group {
                 display: flex;
                 flex-direction: column;
                 gap: 6px;
+                min-width: 0;
             }
 
             .panel {
@@ -146,7 +185,7 @@
             }
 
             .panel-body {
-                flex: 1 1 autho;
+                flex: 1 1 auto;
                 padding: 6px 8px;
                 overflow-y: auto;
                 max-height: none;
@@ -401,6 +440,9 @@
                     display: block;
                     height: auto;
                 }
+                #col-right {
+                    grid-template-columns: 1fr;
+                }
                 #col-left {
                     border-right: none;
                     border-bottom: 1px solid var(--gold);
@@ -496,7 +538,8 @@
             </div>
 
             <div id="col-right">
-                <div class="panel" id="panel-controls">
+                <!-- Buttons: spans both columns so the gamepad has room -->
+                <div class="panel panel-full" id="panel-controls">
                     <div
                         class="panel-head"
                         onclick="this.parentElement.classList.toggle('shut')"
@@ -531,270 +574,292 @@
                     </div>
                 </div>
 
-                <div class="panel" id="panel-cpu">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        CPU
+                <!-- Left sub-column: execution view (CPU state + code + data) -->
+                <div class="panel-group">
+                    <div class="panel" id="panel-cpu">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            CPU
+                        </div>
+                        <div class="panel-body">
+                            <div class="reg-tbl">
+                                <div class="row">
+                                    <span class="lbl">AF</span
+                                    ><span class="val" id="r-af">0000</span>
+                                    <span class="lbl">BC</span
+                                    ><span class="val" id="r-bc">0000</span>
+                                    <span class="lbl">DE</span
+                                    ><span class="val" id="r-de">0000</span>
+                                    <span class="lbl">HL</span
+                                    ><span class="val" id="r-hl">0000</span>
+                                </div>
+                                <div class="row">
+                                    <span class="lbl">SP</span
+                                    ><span class="val" id="r-sp">0000</span>
+                                    <span class="lbl">PC</span
+                                    ><span class="val" id="r-pc">0000</span>
+                                    <span class="lbl">IME</span
+                                    ><span class="val" id="r-ime">0</span>
+                                    <span class="lbl">HLT</span
+                                    ><span class="val" id="r-halt">0</span>
+                                </div>
+                                <div class="row">
+                                    <span class="lbl">Flags</span
+                                    ><span class="val" id="r-flags">----</span>
+                                    <span class="lbl"></span
+                                    ><span class="val"></span>
+                                    <span class="lbl"></span
+                                    ><span class="val"></span>
+                                    <span class="lbl"></span
+                                    ><span class="val"></span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="panel-body">
-                        <div class="reg-tbl">
-                            <div class="row">
-                                <span class="lbl">AF</span
-                                ><span class="val" id="r-af">0000</span>
-                                <span class="lbl">BC</span
-                                ><span class="val" id="r-bc">0000</span>
-                                <span class="lbl">DE</span
-                                ><span class="val" id="r-de">0000</span>
-                                <span class="lbl">HL</span
-                                ><span class="val" id="r-hl">0000</span>
+
+                    <div class="panel" id="panel-disasm">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            Disassembly
+                        </div>
+                        <div class="panel-body"><pre id="disasm-pre"></pre></div>
+                    </div>
+
+                    <div class="panel" id="panel-memory">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            Memory
+                        </div>
+                        <div class="panel-body">
+                            <div id="mem-nav">
+                                <input
+                                    type="text"
+                                    id="mem-addr-input"
+                                    value="0000"
+                                    maxlength="4"
+                                />
+                                <button id="mem-goto">Go</button>
+                                <button id="mem-prev-page">&lt;&lt;</button>
+                                <button id="mem-prev">&lt;</button>
+                                <button id="mem-next">&gt;</button>
+                                <button id="mem-next-page">&gt;&gt;</button>
                             </div>
-                            <div class="row">
-                                <span class="lbl">SP</span
-                                ><span class="val" id="r-sp">0000</span>
-                                <span class="lbl">PC</span
-                                ><span class="val" id="r-pc">0000</span>
-                                <span class="lbl">IME</span
-                                ><span class="val" id="r-ime">0</span>
-                                <span class="lbl">HLT</span
-                                ><span class="val" id="r-halt">0</span>
-                            </div>
-                            <div class="row">
-                                <span class="lbl">Flags</span
-                                ><span class="val" id="r-flags">----</span>
-                                <span class="lbl"></span
-                                ><span class="val"></span>
-                                <span class="lbl"></span
-                                ><span class="val"></span>
-                                <span class="lbl"></span
-                                ><span class="val"></span>
-                            </div>
+                            <pre id="mem-pre"></pre>
                         </div>
                     </div>
                 </div>
 
-                <div class="panel" id="panel-ppu">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        PPU <span id="cgb-badge" style="display:none;margin-left:6px;opacity:0.5">[GBC]</span>
-                    </div>
-                    <div class="panel-body">
-                        <div class="reg-tbl">
-                            <div class="row">
-                                <span class="lbl">LY</span
-                                ><span class="val" id="r-ly">000</span>
-                                <span class="lbl">Mode</span
-                                ><span class="val" id="r-mode">0</span>
-                                <span class="lbl">LCDC</span
-                                ><span class="val" id="r-lcdc">00</span>
-                                <span class="lbl">STAT</span
-                                ><span class="val" id="r-stat">00</span>
+                <!-- Right sub-column: graphics / system view -->
+                <div class="panel-group">
+                    <div class="panel" id="panel-ppu">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            PPU <span id="cgb-badge" style="display:none;margin-left:6px;opacity:0.5">[GBC]</span>
+                        </div>
+                        <div class="panel-body">
+                            <div class="reg-tbl">
+                                <div class="row">
+                                    <span class="lbl">LY</span
+                                    ><span class="val" id="r-ly">000</span>
+                                    <span class="lbl">Mode</span
+                                    ><span class="val" id="r-mode">0</span>
+                                    <span class="lbl">LCDC</span
+                                    ><span class="val" id="r-lcdc">00</span>
+                                    <span class="lbl">STAT</span
+                                    ><span class="val" id="r-stat">00</span>
+                                </div>
+                                <div class="row">
+                                    <span class="lbl">SCX</span
+                                    ><span class="val" id="r-scx">00</span>
+                                    <span class="lbl">SCY</span
+                                    ><span class="val" id="r-scy">00</span>
+                                    <span class="lbl">WX</span
+                                    ><span class="val" id="r-wx">00</span>
+                                    <span class="lbl">WY</span
+                                    ><span class="val" id="r-wy">00</span>
+                                </div>
+                                <!-- DMG palette registers (hidden in GBC mode) -->
+                                <div class="row" id="row-dmg-pal">
+                                    <span class="lbl">BGP</span
+                                    ><span class="val" id="r-bgp">00</span>
+                                    <span class="lbl">OBP0</span
+                                    ><span class="val" id="r-obp0">00</span>
+                                    <span class="lbl">OBP1</span
+                                    ><span class="val" id="r-obp1">00</span>
+                                    <span class="lbl"></span
+                                    ><span class="val"></span>
+                                </div>
+                                <!-- GBC banking/speed registers (shown in GBC mode) -->
+                                <div class="row" id="row-cgb-regs" style="display:none">
+                                    <span class="lbl">VBK</span
+                                    ><span class="val" id="r-vbk">0</span>
+                                    <span class="lbl">SVBK</span
+                                    ><span class="val" id="r-svbk">1</span>
+                                    <span class="lbl">KEY1</span
+                                    ><span class="val" id="r-key1">00</span>
+                                    <span class="lbl">OPRI</span
+                                    ><span class="val" id="r-opri">00</span>
+                                </div>
+                                <!-- GBC palette index registers -->
+                                <div class="row" id="row-cgb-pal-idx" style="display:none">
+                                    <span class="lbl">BCPS</span
+                                    ><span class="val" id="r-bcps">00</span>
+                                    <span class="lbl">OCPS</span
+                                    ><span class="val" id="r-ocps">00</span>
+                                    <span class="lbl">HDMA5</span
+                                    ><span class="val" id="r-hdma5">idle</span>
+                                    <span class="lbl"></span
+                                    ><span class="val"></span>
+                                </div>
                             </div>
-                            <div class="row">
-                                <span class="lbl">SCX</span
-                                ><span class="val" id="r-scx">00</span>
-                                <span class="lbl">SCY</span
-                                ><span class="val" id="r-scy">00</span>
-                                <span class="lbl">WX</span
-                                ><span class="val" id="r-wx">00</span>
-                                <span class="lbl">WY</span
-                                ><span class="val" id="r-wy">00</span>
-                            </div>
-                            <!-- DMG palette registers (hidden in GBC mode) -->
-                            <div class="row" id="row-dmg-pal">
-                                <span class="lbl">BGP</span
-                                ><span class="val" id="r-bgp">00</span>
-                                <span class="lbl">OBP0</span
-                                ><span class="val" id="r-obp0">00</span>
-                                <span class="lbl">OBP1</span
-                                ><span class="val" id="r-obp1">00</span>
-                                <span class="lbl"></span
-                                ><span class="val"></span>
-                            </div>
-                            <!-- GBC banking/speed registers (shown in GBC mode) -->
-                            <div class="row" id="row-cgb-regs" style="display:none">
-                                <span class="lbl">VBK</span
-                                ><span class="val" id="r-vbk">0</span>
-                                <span class="lbl">SVBK</span
-                                ><span class="val" id="r-svbk">1</span>
-                                <span class="lbl">KEY1</span
-                                ><span class="val" id="r-key1">00</span>
-                                <span class="lbl">OPRI</span
-                                ><span class="val" id="r-opri">00</span>
-                            </div>
-                            <!-- GBC palette index registers -->
-                            <div class="row" id="row-cgb-pal-idx" style="display:none">
-                                <span class="lbl">BCPS</span
-                                ><span class="val" id="r-bcps">00</span>
-                                <span class="lbl">OCPS</span
-                                ><span class="val" id="r-ocps">00</span>
-                                <span class="lbl">HDMA5</span
-                                ><span class="val" id="r-hdma5">idle</span>
-                                <span class="lbl"></span
-                                ><span class="val"></span>
+                            <!-- GBC colour palettes (shown in GBC mode) -->
+                            <div id="cgb-palettes" style="display:none;margin-top:6px">
+                                <div class="sub" style="margin-top:0">BG Palettes</div>
+                                <canvas id="cgb-bg-pal" width="32" height="1"
+                                    style="width:256px;height:12px;image-rendering:pixelated;border:1px solid var(--border)"></canvas>
+                                <div class="sub">OBJ Palettes</div>
+                                <canvas id="cgb-obj-pal" width="32" height="1"
+                                    style="width:256px;height:12px;image-rendering:pixelated;border:1px solid var(--border)"></canvas>
                             </div>
                         </div>
-                        <!-- GBC colour palettes (shown in GBC mode) -->
-                        <div id="cgb-palettes" style="display:none;margin-top:6px">
-                            <div class="sub" style="margin-top:0">BG Palettes</div>
-                            <canvas id="cgb-bg-pal" width="32" height="1"
-                                style="width:256px;height:12px;image-rendering:pixelated;border:1px solid var(--border)"></canvas>
-                            <div class="sub">OBJ Palettes</div>
-                            <canvas id="cgb-obj-pal" width="32" height="1"
-                                style="width:256px;height:12px;image-rendering:pixelated;border:1px solid var(--border)"></canvas>
+                    </div>
+
+                    <div class="panel shut" id="panel-io">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            IO
+                        </div>
+                        <div class="panel-body">
+                            <div class="sub">Timer</div>
+                            <div class="reg-tbl">
+                                <div class="row">
+                                    <span class="lbl">DIV</span
+                                    ><span class="val" id="r-div">00</span>
+                                    <span class="lbl">TIMA</span
+                                    ><span class="val" id="r-tima">00</span>
+                                    <span class="lbl">TMA</span
+                                    ><span class="val" id="r-tma">00</span>
+                                    <span class="lbl">TAC</span
+                                    ><span class="val" id="r-tac">00</span>
+                                </div>
+                            </div>
+                            <div class="sub">Interrupts</div>
+                            <div class="reg-tbl">
+                                <div class="row">
+                                    <span class="lbl">IE</span
+                                    ><span class="val" id="r-ie">00</span>
+                                    <span class="lbl">IF</span
+                                    ><span class="val" id="r-if">00</span>
+                                    <span class="lbl">VBL</span
+                                    ><span class="val" id="r-int-vbl">-</span>
+                                    <span class="lbl">LCD</span
+                                    ><span class="val" id="r-int-lcd">-</span>
+                                </div>
+                                <div class="row">
+                                    <span class="lbl">TIM</span
+                                    ><span class="val" id="r-int-tim">-</span>
+                                    <span class="lbl">SER</span
+                                    ><span class="val" id="r-int-ser">-</span>
+                                    <span class="lbl">JOY</span
+                                    ><span class="val" id="r-int-joy">-</span>
+                                    <span class="lbl"></span
+                                    ><span class="val"></span>
+                                </div>
+                            </div>
+                            <div class="sub">Serial</div>
+                            <pre id="serial-output"></pre>
                         </div>
                     </div>
-                </div>
 
-                <div class="panel" id="panel-disasm">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        Disassembly
-                    </div>
-                    <div class="panel-body"><pre id="disasm-pre"></pre></div>
-                </div>
-
-                <div class="panel" id="panel-memory">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        Memory
-                    </div>
-                    <div class="panel-body">
-                        <div id="mem-nav">
-                            <input
-                                type="text"
-                                id="mem-addr-input"
-                                value="0000"
-                                maxlength="4"
-                            />
-                            <button id="mem-goto">Go</button>
-                            <button id="mem-prev-page">&lt;&lt;</button>
-                            <button id="mem-prev">&lt;</button>
-                            <button id="mem-next">&gt;</button>
-                            <button id="mem-next-page">&gt;&gt;</button>
+                    <div class="panel shut" id="panel-tiles">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            VRAM <span id="cgb-badge-vram" style="display:none;margin-left:6px;opacity:0.5">[GBC]</span>
                         </div>
-                        <pre id="mem-pre"></pre>
-                    </div>
-                </div>
-
-                <div class="panel shut" id="panel-tiles">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        Tiles
-                    </div>
-                    <div class="panel-body">
-                        <canvas
-                            id="tile-canvas"
-                            width="128"
-                            height="192"
-                        ></canvas>
-                    </div>
-                </div>
-
-                <div class="panel shut" id="panel-io">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        IO
-                    </div>
-                    <div class="panel-body">
-                        <div class="sub">Timer</div>
-                        <div class="reg-tbl">
-                            <div class="row">
-                                <span class="lbl">DIV</span
-                                ><span class="val" id="r-div">00</span>
-                                <span class="lbl">TIMA</span
-                                ><span class="val" id="r-tima">00</span>
-                                <span class="lbl">TMA</span
-                                ><span class="val" id="r-tma">00</span>
-                                <span class="lbl">TAC</span
-                                ><span class="val" id="r-tac">00</span>
+                        <div class="panel-body">
+                            <div class="vram-sections">
+                                <div class="vram-section">
+                                    <div class="sub">Tile Data</div>
+                                    <div id="tile-bank-select" style="display:none">
+                                        <button id="btn-tile-bank0" class="active-bank">BK 0</button>
+                                        <button id="btn-tile-bank1">BK 1</button>
+                                    </div>
+                                    <canvas
+                                        id="tile-canvas"
+                                        width="128"
+                                        height="192"
+                                    ></canvas>
+                                </div>
+                                <div class="vram-section">
+                                    <div class="sub">Background Map</div>
+                                    <canvas
+                                        id="bg-map-canvas"
+                                        width="256"
+                                        height="256"
+                                    ></canvas>
+                                </div>
                             </div>
                         </div>
-                        <div class="sub">Interrupts</div>
-                        <div class="reg-tbl">
-                            <div class="row">
-                                <span class="lbl">IE</span
-                                ><span class="val" id="r-ie">00</span>
-                                <span class="lbl">IF</span
-                                ><span class="val" id="r-if">00</span>
-                                <span class="lbl">VBL</span
-                                ><span class="val" id="r-int-vbl">-</span>
-                                <span class="lbl">LCD</span
-                                ><span class="val" id="r-int-lcd">-</span>
-                            </div>
-                            <div class="row">
-                                <span class="lbl">TIM</span
-                                ><span class="val" id="r-int-tim">-</span>
-                                <span class="lbl">SER</span
-                                ><span class="val" id="r-int-ser">-</span>
-                                <span class="lbl">JOY</span
-                                ><span class="val" id="r-int-joy">-</span>
-                                <span class="lbl"></span
-                                ><span class="val"></span>
-                            </div>
-                        </div>
-                        <div class="sub">Serial</div>
-                        <pre id="serial-output"></pre>
                     </div>
-                </div>
 
-                <div class="panel" id="panel-motion">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        Accelerometer
-                    </div>
-                    <div class="panel-body">
-                        <div id="motion-status">Accelerometer disabled</div>
-                        <div id="tilt-indicator"><div id="tilt-dot"></div></div>
-                        <button id="btn-motion-toggle">Enable Accelerometer</button>
-                        <div class="sub" style="margin-top:6px">Desktop: drag on screen to simulate tilt</div>
-                    </div>
-                </div>
-
-                <div class="panel" id="panel-camera">
-                    <div
-                        class="panel-head"
-                        onclick="this.parentElement.classList.toggle('shut')"
-                    >
-                        Camera
-                    </div>
-                    <div class="panel-body">
-                        <div id="camera-status"></div>
-                        <div id="camera-settings"></div>
-                        <div class="cam-row">
-                            <div>
-                                <small>Sensor</small
-                                ><canvas
-                                    id="live-capture"
-                                    width="128"
-                                    height="112"
-                                ></canvas>
-                            </div>
-                            <div>
-                                <small>Webcam</small
-                                ><canvas
-                                    id="webcam-preview"
-                                    width="128"
-                                    height="112"
-                                ></canvas>
-                            </div>
+                    <div class="panel" id="panel-camera">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            Camera
                         </div>
-                        <button id="btn-webcam-toggle">Enable Webcam</button>
-                        <span id="webcam-status"></span>
-                        <div id="gallery-grid"></div>
+                        <div class="panel-body">
+                            <div id="camera-status"></div>
+                            <div id="camera-settings"></div>
+                            <div class="cam-row">
+                                <div>
+                                    <small>Sensor</small
+                                    ><canvas
+                                        id="live-capture"
+                                        width="128"
+                                        height="112"
+                                    ></canvas>
+                                </div>
+                                <div>
+                                    <small>Webcam</small
+                                    ><canvas
+                                        id="webcam-preview"
+                                        width="128"
+                                        height="112"
+                                    ></canvas>
+                                </div>
+                            </div>
+                            <button id="btn-webcam-toggle">Enable Webcam</button>
+                            <span id="webcam-status"></span>
+                            <div id="gallery-grid"></div>
+                        </div>
+                    </div>
+
+                    <div class="panel" id="panel-motion">
+                        <div
+                            class="panel-head"
+                            onclick="this.parentElement.classList.toggle('shut')"
+                        >
+                            Accelerometer
+                        </div>
+                        <div class="panel-body">
+                            <div id="motion-status">Accelerometer disabled</div>
+                            <div id="tilt-indicator"><div id="tilt-dot"></div></div>
+                            <button id="btn-motion-toggle">Enable Accelerometer</button>
+                        </div>
                     </div>
                 </div>
             </div>

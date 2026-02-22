@@ -20,6 +20,7 @@ const state = {
   currentRomName: "game",
   isGameBoyCamera: false,
   isMbc7: false,
+  tileViewBank: 0,
 };
 
 async function main() {
@@ -33,7 +34,7 @@ async function main() {
   const motionPanel = $("panel-motion");
 
   // Modules
-  const renderer = createRenderer(state, $("screen"), $("tile-canvas"));
+  const renderer = createRenderer(state, $("screen"), $("tile-canvas"), $("bg-map-canvas"));
   const { updateAll, buttonState } = createPanels(state, {
     disPre: $("disasm-pre"),
     memPre: $("mem-pre"),
@@ -61,6 +62,22 @@ async function main() {
     tiltDot.style.left = `${px.toFixed(1)}%`;
     tiltDot.style.top  = `${py.toFixed(1)}%`;
   });
+
+  // CGB tile viewer bank selector
+  function updateBankButtons() {
+    $("btn-tile-bank0").classList.toggle("active-bank", state.tileViewBank === 0);
+    $("btn-tile-bank1").classList.toggle("active-bank", state.tileViewBank === 1);
+  }
+  $("btn-tile-bank0").onclick = () => {
+    state.tileViewBank = 0;
+    updateBankButtons();
+    if (state.emulator) renderer.renderTiles(0);
+  };
+  $("btn-tile-bank1").onclick = () => {
+    state.tileViewBank = 1;
+    updateBankButtons();
+    if (state.emulator) renderer.renderTiles(1);
+  };
 
   // Load ROM helper
   async function loadRom(data, name) {
@@ -110,7 +127,12 @@ async function main() {
 
     renderer.renderScreen();
     updateAll();
-    renderer.renderTiles();
+    // Show bank selector only in CGB mode; reset to bank 0
+    state.tileViewBank = 0;
+    $("tile-bank-select").style.display = state.emulator.is_cgb_mode() ? "flex" : "none";
+    updateBankButtons();
+    renderer.renderTiles(state.tileViewBank);
+    renderer.renderBgMap();
   }
 
   // Load default ROM (film.gb)
@@ -142,7 +164,8 @@ async function main() {
     state.paused = true;
     if (state.emulator) {
       updateAll();
-      renderer.renderTiles();
+      renderer.renderTiles(state.tileViewBank);
+      renderer.renderBgMap();
     }
   };
   $("btn-step-frame").onclick = () => {
@@ -247,7 +270,8 @@ async function main() {
         if (++state.panelUpdateCounter >= 10) {
           state.panelUpdateCounter = 0;
           updateAll();
-          renderer.renderTiles();
+          renderer.renderTiles(state.tileViewBank);
+          renderer.renderBgMap();
         }
       } else if (state.stepMode === "frame") {
         if (state.isGameBoyCamera && camera.isWebcamEnabled())
@@ -258,13 +282,15 @@ async function main() {
         renderer.renderScreen();
         if (state.isGameBoyCamera) camera.updateLiveView();
         updateAll();
-        renderer.renderTiles();
+        renderer.renderTiles(state.tileViewBank);
+        renderer.renderBgMap();
       } else if (state.stepMode === "instruction") {
         state.emulator.step_instruction();
         state.stepMode = null;
         renderer.renderScreen();
         updateAll();
-        renderer.renderTiles();
+        renderer.renderTiles(state.tileViewBank);
+        renderer.renderBgMap();
       }
 
       frameInfo.textContent = `Frame ${state.frameCounter} ${state.paused ? "[PAUSED]" : ""}`;

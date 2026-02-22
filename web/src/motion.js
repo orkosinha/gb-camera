@@ -11,13 +11,16 @@
 //
 // Desktop fallback: drag on the screen canvas to simulate tilt.
 
-const SCALE = 0x1000 / 9.807; // MBC7 units per m/s²
-const MAX   = 0x3000;          // clamp: ~3g, keeps values in a sane range
+const SCALE     = 0x1000 / 9.807; // MBC7 units per m/s²
+const MAX       = 0x2000;          // clamp at ±2g — matches ADXL202E hardware range
+const ALPHA     = 0.25;            // EMA smoothing factor (lower = smoother, more lag)
+const DEAD_ZONE = 0x1000 * 0.10;  // ignore tilts < ~0.1g to prevent idle drift
 
 export function createMotion(onTilt) {
-    let enabled   = false;
+    let enabled    = false;
     let usingMouse = false;
-    let handler   = null;
+    let handler    = null;
+    let filtX = 0, filtY = 0;     // low-pass filter state
 
     // ── DeviceMotion (mobile) ────────────────────────────────────────────────
 
@@ -44,16 +47,25 @@ export function createMotion(onTilt) {
     function motionHandler(e) {
         const ag = e.accelerationIncludingGravity;
         if (!ag) return;
-        const x =  Math.round((ag.x ?? 0) * SCALE);
-        const y = -Math.round((ag.y ?? 0) * SCALE);
+
+        // Exponential moving average — smooths out sensor noise
+        filtX += ALPHA * ( (ag.x ?? 0) * SCALE - filtX);
+        filtY += ALPHA * (-(ag.y ?? 0) * SCALE - filtY);
+
+        // Dead zone — snap to zero when below threshold (prevents idle drift)
+        const x = Math.abs(filtX) < DEAD_ZONE ? 0 : filtX;
+        const y = Math.abs(filtY) < DEAD_ZONE ? 0 : filtY;
+
         onTilt(
-            Math.max(-MAX, Math.min(MAX, x)),
-            Math.max(-MAX, Math.min(MAX, y)),
+            Math.max(-MAX, Math.min(MAX, Math.round(x))),
+            Math.max(-MAX, Math.min(MAX, Math.round(y))),
         );
     }
 
     async function enableMotion() {
         if (!(await requestPermission())) return false;
+        filtX = 0;
+        filtY = 0;
         handler = motionHandler;
         window.addEventListener('devicemotion', handler);
         enabled = true;
@@ -101,6 +113,8 @@ export function createMotion(onTilt) {
             window.removeEventListener('devicemotion', handler);
             handler = null;
         }
+        filtX   = 0;
+        filtY   = 0;
         enabled    = false;
         usingMouse = false;
         onTilt(0, 0);
