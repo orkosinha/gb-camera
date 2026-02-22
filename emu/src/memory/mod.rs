@@ -1,24 +1,21 @@
-//! Game Boy memory subsystem and cartridge (MBC) emulation.
+//! Game Boy memory subsystem.
 //!
-//! Implements the full 64KB address space including ROM banking (MBC1/MBC3/MBC5),
-//! external RAM, VRAM, Work RAM, OAM, and I/O registers. Also handles
-//! Game Boy Camera (Pocket Camera) cartridge-specific features including
-//! sensor emulation and photo decoding.
+//! Implements the full 64KB address space. Cartridge (ROM/RAM/MBC) is owned
+//! by a `Box<dyn Cartridge>` — see `memory/cartridge/` for implementations.
+//! GBC-specific registers (HDMA, VBK, SVBK, palette RAM) are gated behind
+//! `cgb.mode` so a DMG ROM cannot accidentally trigger GBC behaviour.
 
-mod camera;
+pub(crate) mod camera;
 mod cgb;
-mod rtc;
+pub(crate) mod rtc;
+pub mod cartridge;
 
 use std::fmt;
 
 use cgb::Cgb;
-use rtc::Rtc;
 
-use crate::log::{LogCategory, RateLimiter};
-use crate::{log_info, log_info_limited};
-
-const ROM_BANK_SIZE: usize = 0x4000; // 16KB
-const RAM_BANK_SIZE: usize = 0x2000; // 8KB
+pub use cartridge::MbcType;
+use cartridge::{Cartridge, make_cartridge, ram_size_from_header};
 
 /// Named constants for Game Boy I/O register offsets (relative to 0xFF00).
 #[allow(dead_code)] // constants used selectively across wasm/ios/ppu/cpu modules
@@ -109,27 +106,9 @@ impl fmt::Display for IoState {
     }
 }
 
-/// Cartridge/MBC type
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum MbcType {
-    None,         // No MBC (32KB ROM only)
-    Mbc1,         // MBC1
-    Mbc3,         // MBC3 (with RTC support)
-    Mbc5,         // MBC5
-    PocketCamera, // Game Boy Camera (0xFC)
-}
-
 pub struct Memory {
-    // Cartridge
-    rom: Vec<u8>,
-    cartridge_ram: Vec<u8>,
-    rom_bank: u16, // Changed to u16 for MBC5 support (up to 512 banks)
-    ram_bank: u8,
-    ram_enabled: bool,
-    mbc_type: MbcType,
-
-    // MBC1 specific
-    mbc1_mode: bool, // false = ROM mode, true = RAM mode
+    // Cartridge: owns ROM, RAM, and all MBC banking state
+    cartridge: Box<dyn Cartridge>,
 
     // Internal memory
     vram: [[u8; 0x2000]; 2], // 0x8000-0x9FFF; bank 0 = tiles, bank 1 = GBC tile attrs
@@ -144,39 +123,15 @@ pub struct Memory {
 
     // Serial output buffer (for test ROM debugging)
     serial_output: Vec<u8>,
-
-    // Camera registers (active when ram_bank >= 0x10 on Pocket Camera)
-    camera_regs: [u8; 0x80],
-
-    // Camera image buffer: 128x112 pixels, raw 8-bit grayscale (0=black, 255=white)
-    // This is set from JavaScript webcam and processed by sensor emulation on capture
-    camera_image: Box<[u8; 128 * 112]>,
-    camera_image_ready: bool,
-    camera_capture_dirty: bool,
-
-    // MBC3 Real-Time Clock
-    rtc: Rtc,
-
-    // Smoothed exposure factor — real sensors have settling time from charge integration
-    // and analog noise that naturally damps autoexposure feedback loops. This prevents
-    // oscillation when ROMs adjust exposure every frame.
-    camera_exposure_smooth: f32,
-
-    // Optional exposure override — when Some, process_camera_capture uses this value
-    // instead of camera_regs[0x02..0x03], bypassing ROM control.
-    camera_exposure_override: Option<u16>,
 }
 
 impl Memory {
     pub fn new() -> Self {
+        // Default cartridge: NoMbc with empty ROM
+        let cartridge: Box<dyn Cartridge> =
+            Box::new(cartridge::NoMbc::new(vec![]));
         let mut mem = Memory {
-            rom: Vec::new(),
-            cartridge_ram: vec![0; 128 * 1024], // 128KB for camera
-            rom_bank: 1,
-            ram_bank: 0,
-            ram_enabled: false,
-            mbc_type: MbcType::None,
-            mbc1_mode: false,
+            cartridge,
             vram: [[0; 0x2000]; 2],
             wram: [[0; 0x1000]; 8],
             oam: [0; 0xA0],
@@ -185,20 +140,12 @@ impl Memory {
             ie: 0,
             cgb: Cgb::new(),
             serial_output: Vec::new(),
-            rtc: Rtc::new(),
-            camera_regs: [0; 0x80],
-            camera_image: Box::new([0; 128 * 112]),
-            camera_image_ready: false,
-            camera_capture_dirty: false,
-            camera_exposure_smooth: 1.0,
-            camera_exposure_override: None,
         };
         mem.init_io_defaults();
         mem
     }
 
     fn init_io_defaults(&mut self) {
-        // Initial I/O register values after boot
         self.io[0x00] = 0xCF; // P1/JOYP
         self.io[0x01] = 0x00; // SB
         self.io[0x02] = 0x7E; // SC
@@ -225,42 +172,14 @@ impl Memory {
             return Err("ROM too small");
         }
 
-        // Detect MBC type from cartridge header (0x0147)
         let cart_type = data[0x0147];
-        self.mbc_type = match cart_type {
-            0x00 => MbcType::None,
-            0x01..=0x03 => MbcType::Mbc1,
-            0x0F..=0x13 => MbcType::Mbc3,
-            0x19..=0x1E => MbcType::Mbc5,
-            0xFC => MbcType::PocketCamera,
-            _ => {
-                // Default to MBC5 for unknown types (most compatible)
-                MbcType::Mbc5
-            }
-        };
-
-        // Determine RAM size from header (0x0149)
-        let ram_size = match data[0x0149] {
-            0x00 => 0,
-            0x01 => 2 * 1024,   // 2KB (unofficial)
-            0x02 => 8 * 1024,   // 8KB
-            0x03 => 32 * 1024,  // 32KB (4 banks)
-            0x04 => 128 * 1024, // 128KB (16 banks)
-            0x05 => 64 * 1024,  // 64KB (8 banks)
-            _ => 128 * 1024,    // Default to max
-        };
-
-        // Game Boy Camera always has 128KB RAM
-        let ram_size = if self.mbc_type == MbcType::PocketCamera {
-            128 * 1024
-        } else if ram_size == 0 {
-            // Some games don't report RAM size correctly
-            8 * 1024
+        let ram_size = if cart_type == 0xFC {
+            128 * 1024 // Game Boy Camera always has 128KB RAM
         } else {
-            ram_size
+            ram_size_from_header(data[0x0149])
         };
 
-        // Reset all hardware state (equivalent to a power cycle)
+        // Reset hardware state (power cycle)
         self.vram = [[0; 0x2000]; 2];
         self.wram = [[0; 0x1000]; 8];
         self.oam = [0; 0xA0];
@@ -271,12 +190,7 @@ impl Memory {
         self.cgb.mode = cgb_mode;
         self.init_io_defaults();
 
-        self.cartridge_ram = vec![0; ram_size];
-        self.rom = data.to_vec();
-        self.rom_bank = 1;
-        self.ram_bank = 0;
-        self.ram_enabled = false;
-        self.mbc1_mode = false;
+        self.cartridge = make_cartridge(data.to_vec(), cart_type, ram_size);
 
         Ok(())
     }
@@ -284,106 +198,31 @@ impl Memory {
     #[inline]
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            // ROM Bank 0 (fixed)
-            0x0000..=0x3FFF => self.rom.get(addr as usize).copied().unwrap_or(0xFF),
+            // ROM (cartridge owns bank switching)
+            0x0000..=0x7FFF => self.cartridge.read_rom(addr),
 
-            // ROM Bank 1-N (switchable)
-            0x4000..=0x7FFF => {
-                let bank = self.rom_bank.max(1) as usize; // Bank 0 maps to bank 1
-                let offset = bank * ROM_BANK_SIZE + (addr as usize - 0x4000);
-                self.rom.get(offset).copied().unwrap_or(0xFF)
+            // Video RAM (bank selected by VBK; DMG always uses bank 0)
+            0x8000..=0x9FFF => {
+                let bank = if self.cgb.mode { self.cgb.vram_bank } else { 0 };
+                self.vram[bank][(addr - 0x8000) as usize]
             }
 
-            // Video RAM (bank selected by VBK register)
-            0x8000..=0x9FFF => self.vram[self.cgb.vram_bank][(addr - 0x8000) as usize],
+            // External RAM / Camera registers (cartridge handles all logic)
+            0xA000..=0xBFFF => self.cartridge.read_ram(addr),
 
-            // External RAM / Camera registers / RTC
-            0xA000..=0xBFFF => {
-                // MBC3 RTC registers
-                if self.mbc_type == MbcType::Mbc3 && Rtc::is_rtc_register(self.ram_bank) {
-                    return self.rtc.read_register(self.ram_bank);
-                }
-
-                // Game Boy Camera: bank 0x10+ maps to camera registers
-                // Camera registers are accessible regardless of ram_enabled state
-                if self.mbc_type == MbcType::PocketCamera && self.ram_bank >= 0x10 {
-                    let reg_addr = (addr - 0xA000) as usize;
-                    if reg_addr < 0x80 {
-                        let value = self.camera_regs[reg_addr];
-                        // Log reads of capture status register
-                        if reg_addr == 0 {
-                            static A000_READ_LIMITER: RateLimiter = RateLimiter::new(50);
-                            log_info_limited!(
-                                LogCategory::Camera,
-                                &A000_READ_LIMITER,
-                                "Read A000 (capture status): 0x{:02X} (busy={})",
-                                value,
-                                (value & 0x01) != 0
-                            );
-                        }
-                        return value;
-                    }
-                    // A080-AFFF: Camera sensor output / captured tile data
-                    // The captured image is available here after capture completes
-                    // This maps to the same data we store in SRAM at offset 0x0100
-                    let tile_offset = reg_addr - 0x80;
-                    if tile_offset < 0x0E00 {
-                        // Map to the captured image data in SRAM
-                        let sram_addr = 0x0100 + tile_offset;
-                        let value = self.cartridge_ram.get(sram_addr).copied().unwrap_or(0x00);
-                        static TILE_READ_LIMITER: RateLimiter = RateLimiter::new(20);
-                        log_info_limited!(
-                            LogCategory::Camera,
-                            &TILE_READ_LIMITER,
-                            "Read camera tile data A{:03X} -> SRAM[{:04X}] = {:02X}",
-                            reg_addr,
-                            sram_addr,
-                            value
-                        );
-                        return value;
-                    }
-                    return 0x00;
-                }
-
-                if !self.ram_enabled {
-                    // For Pocket Camera: allow full SRAM access even with RAM disabled
-                    // The Game Boy Camera doesn't require RAM enable for SRAM operations
-                    if self.mbc_type == MbcType::PocketCamera {
-                        let offset =
-                            (self.ram_bank as usize) * RAM_BANK_SIZE + (addr - 0xA000) as usize;
-                        return self.cartridge_ram.get(offset).copied().unwrap_or(0x00);
-                    }
-                    return 0xFF;
-                }
-
-                let offset = (self.ram_bank as usize) * RAM_BANK_SIZE + (addr - 0xA000) as usize;
-                let value = self.cartridge_ram.get(offset).copied().unwrap_or(0xFF);
-
-                // Log reads from camera image area for debugging
-                // Expanded range to catch all captured tile data reads (A100-AEFF = 0x0E00 bytes)
-                if self.mbc_type == MbcType::PocketCamera && (0xA100..0xAF00).contains(&addr) {
-                    static SRAM_READ_LIMITER: RateLimiter = RateLimiter::new(50);
-                    log_info_limited!(
-                        LogCategory::Camera,
-                        &SRAM_READ_LIMITER,
-                        "SRAM read: {:04X} bank={} offset={:04X} -> {:02X}",
-                        addr,
-                        self.ram_bank,
-                        offset,
-                        value
-                    );
-                }
-
-                value
-            }
-
-            // Work RAM — bank 0 fixed, banks 1-7 switchable
+            // Work RAM — bank 0 fixed, banks 1-7 switchable (DMG always uses bank 1)
             0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize],
-            0xD000..=0xDFFF => self.wram[self.cgb.wram_bank][(addr - 0xD000) as usize],
+            0xD000..=0xDFFF => {
+                let bank = if self.cgb.mode { self.cgb.wram_bank } else { 1 };
+                self.wram[bank][(addr - 0xD000) as usize]
+            }
 
             // Echo RAM mirrors 0xC000-0xDDFF
             0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize],
-            0xF000..=0xFDFF => self.wram[self.cgb.wram_bank][(addr - 0xF000) as usize],
+            0xF000..=0xFDFF => {
+                let bank = if self.cgb.mode { self.cgb.wram_bank } else { 1 };
+                self.wram[bank][(addr - 0xF000) as usize]
+            }
 
             // OAM
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
@@ -405,169 +244,31 @@ impl Memory {
     #[inline]
     pub fn write(&mut self, addr: u16, value: u8) {
         match addr {
-            // RAM Enable (0x0000-0x1FFF)
-            0x0000..=0x1FFF => {
-                self.ram_enabled = (value & 0x0F) == 0x0A;
+            // MBC register writes (RAM enable, bank select, mode)
+            0x0000..=0x7FFF => self.cartridge.write_rom(addr, value),
+
+            // Video RAM (DMG always uses bank 0)
+            0x8000..=0x9FFF => {
+                let bank = if self.cgb.mode { self.cgb.vram_bank } else { 0 };
+                self.vram[bank][(addr - 0x8000) as usize] = value;
             }
 
-            // ROM Bank select (0x2000-0x3FFF)
-            0x2000..=0x3FFF => {
-                match self.mbc_type {
-                    MbcType::None => {}
-                    MbcType::Mbc1 => {
-                        // MBC1: 5-bit bank number (bits 0-4)
-                        let bank = value & 0x1F;
-                        self.rom_bank =
-                            (self.rom_bank & 0x60) | (if bank == 0 { 1 } else { bank }) as u16;
-                    }
-                    MbcType::Mbc3 | MbcType::PocketCamera => {
-                        // MBC3/Camera: 7-bit bank number
-                        let bank = value & 0x7F;
-                        self.rom_bank = if bank == 0 { 1 } else { bank as u16 };
-                    }
-                    MbcType::Mbc5 => {
-                        // MBC5: Low 8 bits of bank number
-                        if addr < 0x3000 {
-                            self.rom_bank = (self.rom_bank & 0x100) | (value as u16);
-                        } else {
-                            // High bit of bank number (0x3000-0x3FFF)
-                            self.rom_bank = (self.rom_bank & 0xFF) | ((value as u16 & 1) << 8);
-                        }
-                    }
-                }
-            }
+            // External RAM / Camera registers
+            0xA000..=0xBFFF => self.cartridge.write_ram(addr, value),
 
-            // RAM Bank select / Upper ROM bank bits (0x4000-0x5FFF)
-            0x4000..=0x5FFF => {
-                match self.mbc_type {
-                    MbcType::None => {}
-                    MbcType::Mbc1 => {
-                        if self.mbc1_mode {
-                            // RAM banking mode
-                            self.ram_bank = value & 0x03;
-                        } else {
-                            // ROM banking mode - upper 2 bits
-                            self.rom_bank = (self.rom_bank & 0x1F) | ((value as u16 & 0x03) << 5);
-                        }
-                    }
-                    MbcType::Mbc3 => {
-                        // MBC3: 0x00-0x03 = RAM banks, 0x08-0x0C = RTC registers
-                        self.ram_bank = value;
-                    }
-                    MbcType::Mbc5 => {
-                        self.ram_bank = value & 0x0F;
-                    }
-                    MbcType::PocketCamera => {
-                        // Camera: bank 0x00-0x0F = RAM, 0x10+ = camera registers
-                        let new_bank = value & 0x1F;
-                        // Always log bank switches for debugging
-                        log_info!(
-                            LogCategory::Camera,
-                            "RAM bank: {} -> {} (mode={})",
-                            self.ram_bank,
-                            new_bank,
-                            if new_bank >= 0x10 {
-                                "CAMERA_REGS"
-                            } else {
-                                "SRAM"
-                            }
-                        );
-                        self.ram_bank = new_bank;
-                    }
-                }
-            }
-
-            // Banking mode select / RTC latch (0x6000-0x7FFF)
-            0x6000..=0x7FFF => match self.mbc_type {
-                MbcType::Mbc1 => self.mbc1_mode = (value & 0x01) != 0,
-                MbcType::Mbc3 => self.rtc.write_latch(value),
-                _ => {}
-            },
-
-            // Video RAM (bank selected by VBK register)
-            0x8000..=0x9FFF => self.vram[self.cgb.vram_bank][(addr - 0x8000) as usize] = value,
-
-            // External RAM / Camera registers / RTC
-            0xA000..=0xBFFF => {
-                // MBC3 RTC registers
-                if self.mbc_type == MbcType::Mbc3 && Rtc::is_rtc_register(self.ram_bank) {
-                    self.rtc.write_register(self.ram_bank, value);
-                    return;
-                }
-
-                // Game Boy Camera: bank 0x10+ = camera registers
-                // Camera registers are accessible regardless of ram_enabled state
-                if self.mbc_type == MbcType::PocketCamera && self.ram_bank >= 0x10 {
-                    let reg_addr = (addr - 0xA000) as usize;
-                    if reg_addr < 0x80 {
-                        // Log all camera register writes for debugging
-                        if reg_addr == 0 {
-                            log_info!(
-                                LogCategory::Camera,
-                                "Write A000: 0x{:02X} (capture={}, N={}, VH={})",
-                                value,
-                                (value & 0x01) != 0,
-                                (value >> 1) & 0x01,
-                                (value >> 2) & 0x03
-                            );
-                        } else if reg_addr <= 0x35 {
-                            // Log other sensor registers (A001-A035)
-                            static REG_LIMITER: RateLimiter = RateLimiter::new(100);
-                            log_info_limited!(
-                                LogCategory::Camera,
-                                &REG_LIMITER,
-                                "Write A0{:02X}: 0x{:02X}",
-                                reg_addr,
-                                value
-                            );
-                        }
-
-                        self.camera_regs[reg_addr] = value;
-                        // Register 0 bit 0: 1 = start capture, 0 = capture complete
-                        if reg_addr == 0 && (value & 0x01) != 0 {
-                            // Extract capture parameters
-                            let invert = (value & 0x02) != 0; // N flag: bit 1 = invert/negative
-                            log_info!(
-                                LogCategory::Camera,
-                                "Capture triggered! image_ready={}, invert={}, Processing...",
-                                self.camera_image_ready,
-                                invert
-                            );
-
-                            // Capture triggered - convert camera_image to tiles in SRAM
-                            self.process_camera_capture(invert);
-                            self.camera_capture_dirty = true;
-                            // Clear capture bit to indicate completion
-                            self.camera_regs[0] &= !0x01;
-
-                            log_info!(
-                                LogCategory::Camera,
-                                "Capture complete, A000 now=0x{:02X}",
-                                self.camera_regs[0]
-                            );
-                        }
-                    }
-                    return;
-                }
-
-                // For Pocket Camera: allow SRAM access even with RAM disabled
-                if !self.ram_enabled && self.mbc_type != MbcType::PocketCamera {
-                    return;
-                }
-
-                let offset = (self.ram_bank as usize) * RAM_BANK_SIZE + (addr - 0xA000) as usize;
-                if offset < self.cartridge_ram.len() {
-                    self.cartridge_ram[offset] = value;
-                }
-            }
-
-            // Work RAM — bank 0 fixed, banks 1-7 switchable
+            // Work RAM — bank 0 fixed, banks 1-7 switchable (DMG always uses bank 1)
             0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize] = value,
-            0xD000..=0xDFFF => self.wram[self.cgb.wram_bank][(addr - 0xD000) as usize] = value,
+            0xD000..=0xDFFF => {
+                let bank = if self.cgb.mode { self.cgb.wram_bank } else { 1 };
+                self.wram[bank][(addr - 0xD000) as usize] = value;
+            }
 
             // Echo RAM mirrors 0xC000-0xDDFF
             0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize] = value,
-            0xF000..=0xFDFF => self.wram[self.cgb.wram_bank][(addr - 0xF000) as usize] = value,
+            0xF000..=0xFDFF => {
+                let bank = if self.cgb.mode { self.cgb.wram_bank } else { 1 };
+                self.wram[bank][(addr - 0xF000) as usize] = value;
+            }
 
             // OAM
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
@@ -590,23 +291,60 @@ impl Memory {
     fn read_io(&self, addr: u16) -> u8 {
         let offset = (addr - 0xFF00) as usize;
         match offset {
-            0x00 => self.io[0x00] | 0xC0, // JOYP: upper bits always 1
-            // GBC: KEY1 — speed switch register
-            0x4D => (self.cgb.double_speed as u8) << 7 | 0x7E | self.cgb.speed_armed as u8,
-            // GBC: VBK — VRAM bank
-            0x4F => self.cgb.vram_bank as u8 | 0xFE,
-            // GBC: BCPS — BG palette index
-            0x68 => self.cgb.bcps | 0x40,
-            // GBC: BCPD — BG palette data
-            0x69 => self.cgb.bg_palette_ram[(self.cgb.bcps & 0x3F) as usize],
-            // GBC: OCPS — OBJ palette index
-            0x6A => self.cgb.ocps | 0x40,
-            // GBC: OCPD — OBJ palette data
-            0x6B => self.cgb.obj_palette_ram[(self.cgb.ocps & 0x3F) as usize],
-            // GBC: SVBK — WRAM bank
-            0x70 => self.cgb.wram_bank as u8 | 0xF8,
-            // GBC: RP — infrared (stub)
-            0x56 => 0xFF,
+            // 0xFF00 (joypad) is intercepted by MemoryBus before reaching here
+            // 0xFF04-0xFF07 (timer) are intercepted by MemoryBus before reaching here
+
+            // GBC-only registers — return 0xFF in DMG mode (open bus)
+            0x4D => {
+                if self.cgb.mode {
+                    (self.cgb.double_speed as u8) << 7 | 0x7E | self.cgb.speed_armed as u8
+                } else {
+                    0xFF
+                }
+            }
+            0x4F => {
+                if self.cgb.mode {
+                    self.cgb.vram_bank as u8 | 0xFE
+                } else {
+                    0xFF
+                }
+            }
+            0x68 => {
+                if self.cgb.mode {
+                    self.cgb.bcps | 0x40
+                } else {
+                    0xFF
+                }
+            }
+            0x69 => {
+                if self.cgb.mode {
+                    self.cgb.bg_palette_ram[(self.cgb.bcps & 0x3F) as usize]
+                } else {
+                    0xFF
+                }
+            }
+            0x6A => {
+                if self.cgb.mode {
+                    self.cgb.ocps | 0x40
+                } else {
+                    0xFF
+                }
+            }
+            0x6B => {
+                if self.cgb.mode {
+                    self.cgb.obj_palette_ram[(self.cgb.ocps & 0x3F) as usize]
+                } else {
+                    0xFF
+                }
+            }
+            0x56 => 0xFF, // RP: infrared stub — open bus in both modes
+            0x70 => {
+                if self.cgb.mode {
+                    self.cgb.wram_bank as u8 | 0xF8
+                } else {
+                    0xFF
+                }
+            }
             _ => self.io[offset],
         }
     }
@@ -615,76 +353,113 @@ impl Memory {
     fn write_io(&mut self, addr: u16, value: u8) {
         let offset = (addr - 0xFF00) as usize;
         match offset {
+            // 0xFF00 (joypad) is intercepted by MemoryBus
+            // 0xFF04-0xFF07 (timer) are intercepted by MemoryBus
+
             0x02 => {
-                // SC (Serial Control): When bit 7 is set, transfer is requested
+                // SC: when bit 7 set, transfer SB to serial output
                 self.io[0x02] = value;
                 if value & 0x80 != 0 {
-                    // Transfer the byte in SB to serial output
                     let sb = self.io[0x01];
                     self.serial_output.push(sb);
-                    // Clear transfer bit (transfer complete)
                     self.io[0x02] &= 0x7F;
                 }
             }
-            0x04 => self.io[0x04] = 0, // DIV: writing any value resets to 0
+            0x04 => self.io[0x04] = 0, // DIV: any write resets to 0
             0x44 => {}                 // LY: read-only
             0x46 => self.dma_transfer(value),
-            // GBC: KEY1 — arm speed switch
-            0x4D => self.cgb.speed_armed = value & 1 != 0,
-            // GBC: VBK — VRAM bank select
-            0x4F => self.cgb.vram_bank = (value & 1) as usize,
-            // GBC: HDMA1-4 — store source/dest bytes
-            0x51 => self.io[0x51] = value,
-            0x52 => self.io[0x52] = value,
-            0x53 => self.io[0x53] = value,
-            0x54 => self.io[0x54] = value,
-            // GBC: HDMA5 — trigger DMA transfer
+
+            // GBC-only registers — silently ignored in DMG mode
+            0x4D => {
+                if self.cgb.mode {
+                    self.cgb.speed_armed = value & 1 != 0;
+                }
+            }
+            0x4F => {
+                if self.cgb.mode {
+                    self.cgb.vram_bank = (value & 1) as usize;
+                }
+            }
+            0x51 => {
+                if self.cgb.mode {
+                    self.io[0x51] = value;
+                }
+            }
+            0x52 => {
+                if self.cgb.mode {
+                    self.io[0x52] = value;
+                }
+            }
+            0x53 => {
+                if self.cgb.mode {
+                    self.io[0x53] = value;
+                }
+            }
+            0x54 => {
+                if self.cgb.mode {
+                    self.io[0x54] = value;
+                }
+            }
             0x55 => {
-                let source = ((self.io[0x51] as u16) << 8 | self.io[0x52] as u16) & 0xFFF0;
-                let dest = 0x8000u16 | (((self.io[0x53] as u16) << 8 | self.io[0x54] as u16) & 0x1FF0);
-                self.cgb.hdma_source = source;
-                self.cgb.hdma_dest = dest;
-                if value & 0x80 == 0 {
-                    // General-purpose DMA: transfer all blocks at once
-                    let blocks = (value & 0x7F) as u16 + 1;
-                    let total_bytes = blocks * 16;
-                    for i in 0..total_bytes {
-                        let src_byte = self.read(self.cgb.hdma_source + i);
-                        let dest_vram = (self.cgb.hdma_dest & 0x1FFF) + i;
-                        self.vram[self.cgb.vram_bank][dest_vram as usize] = src_byte;
+                if self.cgb.mode {
+                    let source =
+                        ((self.io[0x51] as u16) << 8 | self.io[0x52] as u16) & 0xFFF0;
+                    let dest = 0x8000u16
+                        | (((self.io[0x53] as u16) << 8 | self.io[0x54] as u16) & 0x1FF0);
+                    self.cgb.hdma_source = source;
+                    self.cgb.hdma_dest = dest;
+                    if value & 0x80 == 0 {
+                        let blocks = (value & 0x7F) as u16 + 1;
+                        let total_bytes = blocks * 16;
+                        for i in 0..total_bytes {
+                            let src_byte = self.read(self.cgb.hdma_source + i);
+                            let dest_vram = (self.cgb.hdma_dest & 0x1FFF) + i;
+                            self.vram[self.cgb.vram_bank][dest_vram as usize] = src_byte;
+                        }
+                        self.cgb.hdma_active = false;
+                        self.io[0x55] = 0xFF;
+                    } else {
+                        self.cgb.hdma_len = value & 0x7F;
+                        self.cgb.hdma_active = true;
+                        self.cgb.hdma_hblank = true;
+                        self.io[0x55] = value & 0x7F;
                     }
-                    self.cgb.hdma_active = false;
-                    self.io[0x55] = 0xFF; // transfer complete
-                } else {
-                    // H-blank DMA: arm for incremental transfer
-                    self.cgb.hdma_len = value & 0x7F;
-                    self.cgb.hdma_active = true;
-                    self.cgb.hdma_hblank = true;
-                    self.io[0x55] = value & 0x7F; // remaining blocks
                 }
             }
-            // GBC: RP — infrared (stub, ignore writes)
-            0x56 => {}
-            // GBC: BCPS — BG palette index
-            0x68 => self.cgb.bcps = value,
-            // GBC: BCPD — BG palette data with auto-increment
+            0x56 => {} // RP: infrared (stub, ignore)
+            0x68 => {
+                if self.cgb.mode {
+                    self.cgb.bcps = value;
+                }
+            }
             0x69 => {
-                self.cgb.bg_palette_ram[(self.cgb.bcps & 0x3F) as usize] = value;
-                if self.cgb.bcps & 0x80 != 0 {
-                    self.cgb.bcps = (self.cgb.bcps & 0x80) | ((self.cgb.bcps + 1) & 0x3F);
+                if self.cgb.mode {
+                    self.cgb.bg_palette_ram[(self.cgb.bcps & 0x3F) as usize] = value;
+                    if self.cgb.bcps & 0x80 != 0 {
+                        self.cgb.bcps =
+                            (self.cgb.bcps & 0x80) | ((self.cgb.bcps + 1) & 0x3F);
+                    }
                 }
             }
-            // GBC: OCPS — OBJ palette index
-            0x6A => self.cgb.ocps = value,
-            // GBC: OCPD — OBJ palette data with auto-increment
+            0x6A => {
+                if self.cgb.mode {
+                    self.cgb.ocps = value;
+                }
+            }
             0x6B => {
-                self.cgb.obj_palette_ram[(self.cgb.ocps & 0x3F) as usize] = value;
-                if self.cgb.ocps & 0x80 != 0 {
-                    self.cgb.ocps = (self.cgb.ocps & 0x80) | ((self.cgb.ocps + 1) & 0x3F);
+                if self.cgb.mode {
+                    self.cgb.obj_palette_ram[(self.cgb.ocps & 0x3F) as usize] = value;
+                    if self.cgb.ocps & 0x80 != 0 {
+                        self.cgb.ocps =
+                            (self.cgb.ocps & 0x80) | ((self.cgb.ocps + 1) & 0x3F);
+                    }
                 }
             }
-            // GBC: SVBK — WRAM bank select (0 → bank 1)
-            0x70 => self.cgb.wram_bank = ((value & 7) as usize).max(1),
+            0x70 => {
+                if self.cgb.mode {
+                    self.cgb.wram_bank = ((value & 7) as usize).max(1);
+                }
+            }
             _ => self.io[offset] = value,
         }
     }
@@ -696,7 +471,8 @@ impl Memory {
         }
     }
 
-    // I/O register accessors for other components
+    // ── I/O register accessors for other components ──────────────────────────
+
     #[inline]
     pub fn read_io_direct(&self, offset: u8) -> u8 {
         self.io[offset as usize]
@@ -718,26 +494,28 @@ impl Memory {
     }
 
     pub fn get_cartridge_ram(&self) -> &[u8] {
-        &self.cartridge_ram
+        self.cartridge.ram_data()
     }
 
     pub fn load_cartridge_ram(&mut self, data: &[u8]) {
-        let len = data.len().min(self.cartridge_ram.len());
-        self.cartridge_ram[..len].copy_from_slice(&data[..len]);
+        self.cartridge.load_ram(data);
     }
 
     /// Read a camera hardware register directly (index 0x00-0x7F).
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: camera_reg
     pub fn camera_reg(&self, index: u8) -> u8 {
-        self.camera_regs[(index & 0x7F) as usize]
+        self.cartridge
+            .as_camera()
+            .map(|c| c.reg(index))
+            .unwrap_or(0xFF)
     }
 
-    /// Set or clear the exposure override.
-    /// When `Some(value)`, camera captures use this exposure instead of the ROM's.
-    /// When `None`, the ROM controls exposure normally.
+    /// Set or clear the exposure override for the camera sensor.
     #[cfg_attr(not(feature = "ios"), allow(dead_code))] // ios: gb_set_camera_exposure
     pub fn set_camera_exposure_override(&mut self, value: Option<u16>) {
-        self.camera_exposure_override = value;
+        if let Some(cam) = self.cartridge.as_camera_mut() {
+            cam.set_exposure_override(value);
+        }
     }
 
     /// Get serial output as a string (for test ROM debugging).
@@ -752,30 +530,30 @@ impl Memory {
         self.serial_output.clear();
     }
 
-    /// Advance the RTC based on wall-clock elapsed time.
+    /// Advance the RTC (delegated to cartridge; no-op for non-MBC3).
     pub fn tick_rtc(&mut self) {
-        self.rtc.tick();
+        self.cartridge.tick_rtc();
     }
 
     /// Get the detected MBC type.
     pub fn get_mbc_type(&self) -> MbcType {
-        self.mbc_type
+        self.cartridge.mbc_type()
     }
 
     /// Get the number of ROM banks.
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: load_rom
     pub fn get_rom_bank_count(&self) -> usize {
-        self.rom.len() / ROM_BANK_SIZE
+        self.cartridge.rom_bank_count()
     }
 
     /// Get current memory state for debugging.
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))] // wasm: log_frame_debug
     pub fn get_debug_state(&self) -> MemoryDebugState {
         MemoryDebugState {
-            rom_bank: self.rom_bank,
-            ram_bank: self.ram_bank,
-            ram_enabled: self.ram_enabled,
-            mbc_type: self.mbc_type,
+            rom_bank: self.cartridge.current_rom_bank(),
+            ram_bank: self.cartridge.current_ram_bank(),
+            ram_enabled: self.cartridge.is_ram_enabled(),
+            mbc_type: self.cartridge.mbc_type(),
         }
     }
 
@@ -803,6 +581,7 @@ impl Memory {
     // ── GBC accessors ────────────────────────────────────────────────────────
 
     /// Check if GBC mode is active for this ROM session.
+    #[allow(dead_code)] // used by wasm/ios features and tests
     pub fn is_cgb_mode(&self) -> bool {
         self.cgb.mode
     }
@@ -839,7 +618,6 @@ impl Memory {
     }
 
     /// Perform one H-blank HDMA step: transfer 16 bytes from source to VRAM.
-    /// Called by the core once per H-blank if HDMA is active in H-blank mode.
     pub fn tick_hdma_hblank(&mut self) {
         if !self.cgb.hdma_active || !self.cgb.hdma_hblank {
             return;
@@ -853,11 +631,82 @@ impl Memory {
         self.cgb.hdma_dest += 16;
         if self.cgb.hdma_len == 0 {
             self.cgb.hdma_active = false;
-            self.io[0x55] = 0xFF; // done
+            self.io[0x55] = 0xFF;
         } else {
             self.cgb.hdma_len -= 1;
-            self.io[0x55] = self.cgb.hdma_len; // remaining
+            self.io[0x55] = self.cgb.hdma_len;
         }
+    }
+
+    // ── Camera accessors (delegates to PocketCamera cartridge) ──────────────
+
+    pub fn set_camera_image(&mut self, data: &[u8]) {
+        if let Some(cam) = self.cartridge.as_camera_mut() {
+            cam.set_image(data);
+        }
+    }
+
+    pub fn is_camera_image_ready(&self) -> bool {
+        self.cartridge
+            .as_camera()
+            .map(|c| c.is_image_ready())
+            .unwrap_or(false)
+    }
+
+    pub fn is_camera_capture_dirty(&self) -> bool {
+        self.cartridge
+            .as_camera()
+            .map(|c| c.is_capture_dirty())
+            .unwrap_or(false)
+    }
+
+    pub fn clear_camera_capture_dirty(&mut self) {
+        if let Some(cam) = self.cartridge.as_camera_mut() {
+            cam.clear_capture_dirty();
+        }
+    }
+
+    pub fn camera_capture_sram(&self) -> &[u8] {
+        static EMPTY: [u8; 0] = [];
+        self.cartridge
+            .as_camera()
+            .map(|c| c.capture_sram())
+            .unwrap_or(&EMPTY)
+    }
+
+    pub fn decode_camera_photo(&self, slot: u8) -> Vec<u8> {
+        self.cartridge
+            .as_camera()
+            .map(|c| c.decode_photo(slot))
+            .unwrap_or_default()
+    }
+
+    pub fn encode_camera_photo(&mut self, slot: u8, rgba: &[u8]) -> bool {
+        self.cartridge
+            .as_camera_mut()
+            .map(|c| c.encode_photo(slot, rgba))
+            .unwrap_or(false)
+    }
+
+    pub fn clear_camera_photo_slot(&mut self, slot: u8) {
+        if let Some(cam) = self.cartridge.as_camera_mut() {
+            cam.clear_photo_slot(slot);
+        }
+    }
+
+    pub fn camera_contrast(&self) -> i32 {
+        self.cartridge
+            .as_camera()
+            .map(|c| c.contrast())
+            .unwrap_or(-1)
+    }
+
+    #[cfg_attr(not(any(feature = "ios", feature = "wasm")), allow(dead_code))]
+    pub fn camera_photo_count(&self) -> u8 {
+        self.cartridge
+            .as_camera()
+            .map(|c| c.photo_count())
+            .unwrap_or(0)
     }
 }
 
@@ -870,6 +719,14 @@ impl Default for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: create a minimal ROM (0x8000 bytes) with given cart type and RAM size byte.
+    fn make_rom(cart_type: u8, ram_size_byte: u8) -> Vec<u8> {
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0147] = cart_type;
+        rom[0x0149] = ram_size_byte;
+        rom
+    }
 
     #[test]
     fn test_wram_read_write() {
@@ -885,7 +742,6 @@ mod tests {
     fn test_echo_ram() {
         let mut mem = Memory::new();
         mem.write(0xC000, 0x42);
-        // Echo RAM mirrors 0xC000-0xDDFF at 0xE000-0xFDFF
         assert_eq!(mem.read(0xE000), 0x42);
 
         mem.write(0xE100, 0x55);
@@ -933,7 +789,6 @@ mod tests {
     #[test]
     fn test_unusable_region() {
         let mem = Memory::new();
-        // Unusable region should return 0xFF
         assert_eq!(mem.read(0xFEA0), 0xFF);
         assert_eq!(mem.read(0xFEFF), 0xFF);
     }
@@ -942,17 +797,13 @@ mod tests {
     fn test_rom_bank_switching() {
         let mut mem = Memory::new();
 
-        // Create a test ROM with multiple banks
-        let mut rom = vec![0u8; 0x8000]; // 32KB = 2 banks
-        rom[0x0000] = 0x11; // Bank 0
-        rom[0x4000] = 0x22; // Bank 1 at 0x4000
+        let mut rom = vec![0u8; 0x8000];
+        rom[0x0000] = 0x11;
+        rom[0x4000] = 0x22;
 
         mem.load_rom(&rom, false).unwrap();
 
-        // Bank 0 is always at 0x0000-0x3FFF
         assert_eq!(mem.read(0x0000), 0x11);
-
-        // Bank 1 is default at 0x4000-0x7FFF
         assert_eq!(mem.read(0x4000), 0x22);
     }
 
@@ -960,33 +811,31 @@ mod tests {
     fn test_rom_bank_select() {
         let mut mem = Memory::new();
 
-        // Create a test ROM with 4 banks
-        let mut rom = vec![0u8; 0x10000]; // 64KB = 4 banks
-        rom[0x0147] = 0x01; // MBC1 cartridge type
+        let mut rom = vec![0u8; 0x10000];
+        rom[0x0147] = 0x01; // MBC1
         rom[0x4000] = 0x11; // Bank 1
         rom[0x8000] = 0x22; // Bank 2
         rom[0xC000] = 0x33; // Bank 3
 
         mem.load_rom(&rom, false).unwrap();
 
-        // Select bank 2
         mem.write(0x2000, 0x02);
         assert_eq!(mem.read(0x4000), 0x22);
 
-        // Select bank 3
         mem.write(0x2000, 0x03);
         assert_eq!(mem.read(0x4000), 0x33);
 
-        // Bank 0 written as 1 (bank 0 not selectable for switchable area)
-        mem.write(0x2000, 0x00);
+        mem.write(0x2000, 0x00); // bank 0 → maps to bank 1
         assert_eq!(mem.read(0x4000), 0x11);
     }
 
     #[test]
     fn test_external_ram_enable() {
         let mut mem = Memory::new();
+        // Use MBC1 + RAM cartridge so RAM enable works
+        mem.load_rom(&make_rom(0x03, 0x02), false).unwrap(); // MBC1+RAM+BATTERY, 8KB
 
-        // RAM disabled by default, should return 0xFF
+        // RAM disabled by default
         assert_eq!(mem.read(0xA000), 0xFF);
 
         // Enable RAM
@@ -1003,8 +852,6 @@ mod tests {
     fn test_div_reset() {
         let mut mem = Memory::new();
         mem.write_io_direct(0x04, 0xFF);
-
-        // Writing any value to DIV resets it to 0
         mem.write(0xFF04, 0x42);
         assert_eq!(mem.read(0xFF04), 0x00);
     }
@@ -1013,8 +860,6 @@ mod tests {
     fn test_ly_readonly() {
         let mut mem = Memory::new();
         mem.write_io_direct(0x44, 0x50);
-
-        // Writing to LY should not change it
         mem.write(0xFF44, 0x99);
         assert_eq!(mem.read(0xFF44), 0x50);
     }
@@ -1022,16 +867,10 @@ mod tests {
     #[test]
     fn test_dma_transfer() {
         let mut mem = Memory::new();
-
-        // Set up source data in WRAM
         for i in 0..0xA0 {
             mem.write(0xC000 + i as u16, i as u8);
         }
-
-        // Trigger DMA from 0xC000
         mem.write(0xFF46, 0xC0);
-
-        // Check OAM was populated
         for i in 0..0xA0 {
             assert_eq!(mem.read(0xFE00 + i as u16), i as u8);
         }
@@ -1040,28 +879,28 @@ mod tests {
     #[test]
     fn test_load_rom_too_small() {
         let mut mem = Memory::new();
-        let small_rom = vec![0u8; 0x100]; // Too small
+        let small_rom = vec![0u8; 0x100];
         assert!(mem.load_rom(&small_rom, false).is_err());
     }
 
     #[test]
     fn test_cartridge_ram_persistence() {
         let mut mem = Memory::new();
+        // Use MBC1 + RAM so enable/disable works
+        mem.load_rom(&make_rom(0x03, 0x02), false).unwrap();
 
-        // Enable RAM and write
-        mem.write(0x0000, 0x0A);
+        mem.write(0x0000, 0x0A); // Enable RAM
         mem.write(0xA000, 0x42);
         mem.write(0xA001, 0x43);
 
-        // Get RAM
-        let ram = mem.get_cartridge_ram();
+        let ram = mem.get_cartridge_ram().to_vec();
         assert_eq!(ram[0], 0x42);
         assert_eq!(ram[1], 0x43);
 
-        // Load RAM into new memory
         let mut mem2 = Memory::new();
+        mem2.load_rom(&make_rom(0x03, 0x02), false).unwrap();
         mem2.load_cartridge_ram(&ram);
-        mem2.write(0x0000, 0x0A); // Enable RAM
+        mem2.write(0x0000, 0x0A);
         assert_eq!(mem2.read(0xA000), 0x42);
         assert_eq!(mem2.read(0xA001), 0x43);
     }
@@ -1080,24 +919,22 @@ mod tests {
     #[test]
     fn test_cgb_vram_bank_switching() {
         let mut mem = Memory::new();
+        mem.load_rom(&vec![0u8; 0x8000], true).unwrap(); // CGB mode
 
-        // Bank 0 is active by default
         mem.write(0x8000, 0xAA);
         assert_eq!(mem.read(0x8000), 0xAA);
 
-        // Switch to bank 1 via VBK register
+        // Switch to VRAM bank 1
         mem.write(0xFF4F, 0x01);
         assert_eq!(mem.read(0xFF4F), 0xFF); // bit 0 set, other bits = 1
 
-        // Write distinct value in bank 1
         mem.write(0x8000, 0xBB);
         assert_eq!(mem.read(0x8000), 0xBB);
 
-        // Switch back to bank 0 — original value preserved
+        // Switch back to bank 0
         mem.write(0xFF4F, 0x00);
         assert_eq!(mem.read(0x8000), 0xAA);
 
-        // Direct bank read confirms isolation
         assert_eq!(mem.read_vram_bank(0, 0x8000), 0xAA);
         assert_eq!(mem.read_vram_bank(1, 0x8000), 0xBB);
     }
@@ -1105,42 +942,35 @@ mod tests {
     #[test]
     fn test_cgb_wram_bank_switching() {
         let mut mem = Memory::new();
+        mem.load_rom(&vec![0u8; 0x8000], true).unwrap(); // CGB mode
 
-        // Bank 0 is fixed at 0xC000-0xCFFF
         mem.write(0xC100, 0x11);
+        mem.write(0xD000, 0x22); // default switchable bank = 1
 
-        // Default switchable bank is 1
-        mem.write(0xD000, 0x22);
-
-        // Switch to bank 3 via SVBK
+        // Switch to bank 3
         mem.write(0xFF70, 0x03);
-        assert_eq!(mem.read(0xFF70), 0x03 | 0xF8); // lower 3 bits set, upper 5 = 1
+        assert_eq!(mem.read(0xFF70), 0x03 | 0xF8);
 
         mem.write(0xD000, 0x33);
         assert_eq!(mem.read(0xD000), 0x33);
 
-        // Switch back to bank 1 — original value preserved
+        // Back to bank 1
         mem.write(0xFF70, 0x01);
         assert_eq!(mem.read(0xD000), 0x22);
 
-        // Bank 0 is unaffected
         assert_eq!(mem.read(0xC100), 0x11);
     }
 
     #[test]
     fn test_cgb_bg_palette_write_read() {
         let mut mem = Memory::new();
+        mem.load_rom(&vec![0u8; 0x8000], true).unwrap(); // CGB mode
 
-        // Set BCPS to address 0 (no auto-increment)
         mem.write(0xFF68, 0x00);
-        // Write lo byte of white (RGB555 white lo = 0xFF)
         mem.write(0xFF69, 0xFF);
-        // Advance to next byte manually
         mem.write(0xFF68, 0x01);
-        // Write hi byte of white (RGB555 white hi = 0x7F)
         mem.write(0xFF69, 0x7F);
 
-        // read_bg_palette(0, 0) should return (0xFF, 0x7F)
         let (lo, hi) = mem.read_bg_palette(0, 0);
         assert_eq!(lo, 0xFF, "palette lo byte");
         assert_eq!(hi, 0x7F, "palette hi byte");
@@ -1149,21 +979,18 @@ mod tests {
     #[test]
     fn test_cgb_obj_palette_auto_increment() {
         let mut mem = Memory::new();
+        mem.load_rom(&vec![0u8; 0x8000], true).unwrap(); // CGB mode
 
-        // OCPS = 0x80 enables auto-increment starting at address 0
-        mem.write(0xFF6A, 0x80);
+        mem.write(0xFF6A, 0x80); // OCPS auto-increment at address 0
 
-        // Write 8 bytes (4 colours × 2 bytes) for OBJ palette 0
         let bytes = [0x00u8, 0x00, 0xFF, 0x7F, 0x1F, 0x00, 0xFF, 0x00];
         for b in bytes {
             mem.write(0xFF6B, b);
         }
 
-        // Address should have auto-incremented to 8
         let ocps = mem.read(0xFF6A);
         assert_eq!(ocps & 0x3F, 8, "OCPS address after 8 auto-increments");
 
-        // Verify palette 0 colour 1 = white (0xFF, 0x7F)
         let (lo, hi) = mem.read_obj_palette(0, 1);
         assert_eq!(lo, 0xFF);
         assert_eq!(hi, 0x7F);
@@ -1172,30 +999,48 @@ mod tests {
     #[test]
     fn test_cgb_key1_arm_and_toggle() {
         let mut mem = Memory::new();
+        mem.load_rom(&vec![0u8; 0x8000], true).unwrap(); // CGB mode
 
-        // Initially not armed, not double speed
         assert!(!mem.is_double_speed());
         let key1 = mem.read(0xFF4D);
         assert_eq!(key1 & 0x01, 0, "speed_armed initially clear");
         assert_eq!(key1 & 0x80, 0, "double_speed initially clear");
 
-        // Arm the speed switch
         mem.write(0xFF4D, 0x01);
         let key1 = mem.read(0xFF4D);
         assert_eq!(key1 & 0x01, 1, "speed_armed set");
-        assert!(!mem.is_double_speed());
 
-        // Toggle (simulates STOP execution)
         mem.toggle_double_speed();
-        assert!(mem.is_double_speed(), "now in double speed");
+        assert!(mem.is_double_speed());
 
         let key1 = mem.read(0xFF4D);
         assert_eq!(key1 & 0x80, 0x80, "bit 7 reflects double_speed");
         assert_eq!(key1 & 0x01, 0, "speed_armed cleared after toggle");
 
-        // Toggle again → back to normal speed
-        mem.write(0xFF4D, 0x01); // re-arm
+        mem.write(0xFF4D, 0x01);
         mem.toggle_double_speed();
         assert!(!mem.is_double_speed());
+    }
+
+    #[test]
+    fn test_dmg_ignores_cgb_registers() {
+        // In DMG mode, GBC-only registers should return 0xFF on read
+        // and silently discard writes.
+        let mut mem = Memory::new();
+        mem.load_rom(&vec![0u8; 0x8000], false).unwrap(); // DMG mode
+
+        // VBK write should be ignored — VRAM stays on bank 0
+        mem.write(0x8000, 0xAA);
+        mem.write(0xFF4F, 0x01); // attempt VBK switch
+        mem.write(0x8000, 0xBB); // should write to bank 0 (still)
+        assert_eq!(mem.read(0x8000), 0xBB);
+        assert_eq!(mem.read_vram_bank(0, 0x8000), 0xBB);
+        assert_eq!(mem.read_vram_bank(1, 0x8000), 0x00); // bank 1 untouched
+
+        // GBC registers return 0xFF in DMG mode
+        assert_eq!(mem.read(0xFF4D), 0xFF); // KEY1
+        assert_eq!(mem.read(0xFF4F), 0xFF); // VBK
+        assert_eq!(mem.read(0xFF68), 0xFF); // BCPS
+        assert_eq!(mem.read(0xFF70), 0xFF); // SVBK
     }
 }

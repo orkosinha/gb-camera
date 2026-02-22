@@ -297,12 +297,21 @@ impl Cpu {
     pub fn reset(&mut self, cgb_mode: bool) {
         *self = Self::new();
         if cgb_mode {
-            // GBC ROMs check A == 0x11 at 0x0100 to detect GBC hardware.
+            // Post-GBC boot ROM register state (per Pan Docs / Gambatte reference):
+            // A=0x11 is the GBC hardware indicator games check at 0x0100.
+            // Other registers differ from the DMG boot ROM values.
             self.a = 0x11;
+            self.f = 0x80; // Z=1, N=0, H=0, C=0
+            self.c = 0x00;
+            self.d = 0xFF;
+            self.e = 0x56;
+            self.h = 0x00;
+            self.l = 0x0D;
         }
     }
 
     /// Set GBC initial register state (A=0x11).
+    #[allow(dead_code)]
     pub fn set_cgb_initial_state(&mut self) {
         self.a = 0x11;
     }
@@ -363,7 +372,7 @@ mod tests {
                 rom[0x100 + i] = byte;
             }
         }
-        mem.load_rom(&rom, false).unwrap();
+        mem.load_rom(&rom, true).unwrap(); // CGB mode: KEY1 register correctly reflects speed_armed
         TestContext {
             cpu: Cpu::new(),
             memory: mem,
@@ -627,5 +636,85 @@ mod tests {
         // Read from WRAM at 0xC000
         let bus = MemoryBus::new(&mut ctx.memory, &mut ctx.timer, &mut ctx.joypad);
         assert_eq!(bus.read(0xC000), 0x42);
+    }
+
+    // ── GBC initial register state ────────────────────────────────────────────
+
+    #[test]
+    fn test_reset_dmg_registers() {
+        let mut cpu = Cpu::new();
+        cpu.reset(false);
+        assert_eq!(cpu.a, 0x01, "A (DMG)");
+        assert_eq!(cpu.f, 0xB0, "F (DMG)");
+        assert_eq!(cpu.b, 0x00, "B (DMG)");
+        assert_eq!(cpu.c, 0x13, "C (DMG)");
+        assert_eq!(cpu.d, 0x00, "D (DMG)");
+        assert_eq!(cpu.e, 0xD8, "E (DMG)");
+        assert_eq!(cpu.h, 0x01, "H (DMG)");
+        assert_eq!(cpu.l, 0x4D, "L (DMG)");
+    }
+
+    #[test]
+    fn test_reset_cgb_registers() {
+        let mut cpu = Cpu::new();
+        cpu.reset(true);
+        assert_eq!(cpu.a, 0x11, "A (GBC) — hardware ID checked by games at 0x0100");
+        assert_eq!(cpu.f, 0x80, "F (GBC)");
+        assert_eq!(cpu.b, 0x00, "B (GBC)");
+        assert_eq!(cpu.c, 0x00, "C (GBC)");
+        assert_eq!(cpu.d, 0xFF, "D (GBC)");
+        assert_eq!(cpu.e, 0x56, "E (GBC)");
+        assert_eq!(cpu.h, 0x00, "H (GBC)");
+        assert_eq!(cpu.l, 0x0D, "L (GBC)");
+    }
+
+    // ── KEY1 / STOP speed switch ──────────────────────────────────────────────
+
+    #[test]
+    fn test_stop_without_key1_halts_cpu() {
+        // STOP with KEY1 bit 0 clear → normal HALT behaviour
+        let mut ctx = setup_with_rom(&[0x10, 0x00]); // STOP
+        assert!(!ctx.memory.is_double_speed());
+        ctx.step();
+        assert!(ctx.cpu.halted, "STOP without KEY1 armed should halt");
+        assert!(!ctx.memory.is_double_speed(), "speed unchanged");
+    }
+
+    #[test]
+    fn test_stop_with_key1_armed_switches_speed() {
+        // This test would FAIL before the KEY1 fix: read_io_direct(KEY1) returned
+        // io[0x4D] = 0 even after writing 0x01, so STOP would always halt.
+        let mut ctx = setup_with_rom(&[0x10, 0x00]); // STOP
+
+        // Arm the speed switch (writes to cgb.speed_armed, not io[0x4D])
+        ctx.memory.write(0xFF4D, 0x01);
+        assert!(!ctx.memory.is_double_speed());
+
+        ctx.step(); // STOP → reads via bus.read(0xFF4D) → sees speed_armed=1
+
+        assert!(!ctx.cpu.halted, "CPU must not halt when speed switch is triggered");
+        assert!(ctx.memory.is_double_speed(), "double speed should be active");
+    }
+
+    #[test]
+    fn test_key1_reflects_speed_after_switch() {
+        let mut ctx = setup_with_rom(&[0x10, 0x00, 0x10, 0x00]); // two STOPs
+
+        // Arm and switch to double speed
+        ctx.memory.write(0xFF4D, 0x01);
+        ctx.step();
+        assert!(ctx.memory.is_double_speed());
+
+        // KEY1 should show: bit 7 = double speed, bit 0 = armed cleared
+        let key1 = ctx.memory.read(0xFF4D);
+        assert_eq!(key1 & 0x80, 0x80, "bit 7 reflects double speed");
+        assert_eq!(key1 & 0x01, 0x00, "bit 0 cleared after switch");
+
+        // Arm again and switch back to normal speed
+        ctx.memory.write(0xFF4D, 0x01);
+        ctx.step();
+        assert!(!ctx.memory.is_double_speed(), "back to normal speed");
+        let key1 = ctx.memory.read(0xFF4D);
+        assert_eq!(key1 & 0x80, 0x00, "bit 7 cleared");
     }
 }

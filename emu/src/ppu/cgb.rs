@@ -3,9 +3,9 @@
 //! Reads tile attributes from VRAM bank 1, decodes RGB555 palette entries,
 //! and enforces GBC sprite priority rules (force-priority, OAM bg-priority, LCDC master).
 
-use crate::memory::io;
-use crate::memory::Memory;
 use super::{Ppu, SCREEN_WIDTH};
+use crate::memory::Memory;
+use crate::memory::io;
 
 impl Ppu {
     /// Convert a 15-bit RGB555 little-endian pair to RGBA.
@@ -58,8 +58,7 @@ impl Ppu {
             let high = memory.read_vram_bank(tile_bank, tile_data_addr + 1);
 
             let pixel_col = if x_flip { x & 7 } else { 7 - (x & 7) };
-            let color_idx =
-                (((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1)) as usize;
+            let color_idx = (((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1)) as usize;
 
             let (lo, hi) = memory.read_bg_palette(palette, color_idx);
             let rgba = Self::rgb555_to_rgba(lo, hi);
@@ -72,6 +71,10 @@ impl Ppu {
 
     pub(super) fn render_window_gbc(&mut self, memory: &Memory, line: usize) {
         let lcdc = memory.read_io_direct(io::LCDC);
+        if lcdc & 0x20 == 0 {
+            return;
+        }
+
         let wy = memory.read_io_direct(io::WY) as usize;
         let wx = memory.read_io_direct(io::WX) as i16 - 7;
 
@@ -89,7 +92,7 @@ impl Ppu {
         let start_x = wx.max(0) as usize;
 
         for screen_x in start_x..SCREEN_WIDTH {
-            let window_x = (screen_x as i16 - wx) as usize;
+            let window_x = screen_x - start_x;
             let tile_col = window_x >> 3;
             let tile_map_addr = tile_map_base + (tile_row * 32 + tile_col) as u16;
 
@@ -111,11 +114,14 @@ impl Ppu {
                 tile_data_base + tile_idx as u16 * 16 + pixel_row_offset
             };
 
-            let pixel_col = if x_flip { window_x & 7 } else { 7 - (window_x & 7) };
+            let pixel_col = if x_flip {
+                window_x & 7
+            } else {
+                7 - (window_x & 7)
+            };
             let low = memory.read_vram_bank(tile_bank, tile_data_addr);
             let high = memory.read_vram_bank(tile_bank, tile_data_addr + 1);
-            let color_idx =
-                (((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1)) as usize;
+            let color_idx = (((high >> pixel_col) & 1) << 1 | ((low >> pixel_col) & 1)) as usize;
 
             let (lo, hi) = memory.read_bg_palette(palette, color_idx);
             let rgba = Self::rgb555_to_rgba(lo, hi);
@@ -130,6 +136,10 @@ impl Ppu {
 
     pub(super) fn render_sprites_gbc(&mut self, memory: &Memory, line: usize) {
         let lcdc = memory.read_io_direct(io::LCDC);
+        if lcdc & 0x02 == 0 {
+            return;
+        }
+
         let sprite_height: i16 = if lcdc & 0x04 != 0 { 16 } else { 8 };
         let oam = memory.get_oam();
 
@@ -147,8 +157,6 @@ impl Ppu {
                 }
             }
         }
-
-        sprites[..sprite_count].sort_by_key(|s| s.0);
 
         for &(x, screen_y, mut tile, flags) in sprites[..sprite_count].iter().rev() {
             let flip_x = flags & 0x20 != 0;

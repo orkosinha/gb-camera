@@ -1074,8 +1074,10 @@ impl Cpu {
             } // HALT
             0x10 => {
                 self.fetch(bus); // consume the mandatory 0x00 operand
-                // In GBC mode, STOP with KEY1 armed triggers CPU speed switch
-                if bus.read_io_direct(crate::memory::io::KEY1) & 0x01 != 0 {
+                // KEY1 bit 0 = speed switch pending. Must read via bus.read()
+                // (not read_io_direct) because KEY1 is computed from cgb.speed_armed,
+                // not stored in the raw io[] array.
+                if bus.read(0xFF4D) & 0x01 != 0 {
                     bus.memory_mut().toggle_double_speed();
                 } else {
                     self.halted = true;

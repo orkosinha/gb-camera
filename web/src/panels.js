@@ -30,10 +30,29 @@ export function createPanels(state, dom) {
         $('r-halt').textContent = e.cpu_halted() ? '1' : '0';
     }
 
+    function drawPaletteCanvas(canvasId, getFn) {
+        const canvas = $(canvasId);
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(32, 1);
+        for (let pal = 0; pal < 8; pal++) {
+            for (let col = 0; col < 4; col++) {
+                const rgb = getFn(pal, col);
+                const i = (pal * 4 + col) * 4;
+                img.data[i]     = (rgb >> 16) & 0xFF; // R
+                img.data[i + 1] = (rgb >>  8) & 0xFF; // G
+                img.data[i + 2] =  rgb        & 0xFF; // B
+                img.data[i + 3] = 255;
+            }
+        }
+        ctx.putImageData(img, 0, 0);
+    }
+
     function updatePPU() {
         const e = state.emulator;
         const mode = e.ppu_mode();
         const modes = ['HBL', 'VBL', 'OAM', 'DRW'];
+        const cgb = e.is_cgb_mode();
 
         $('r-ly').textContent = String(e.ppu_line()).padStart(3);
         $('r-mode').textContent = `${mode} ${modes[mode] || '?'}`;
@@ -43,9 +62,24 @@ export function createPanels(state, dom) {
         $('r-scy').textContent = hex2(e.io_scy());
         $('r-wx').textContent = hex2(e.io_wx());
         $('r-wy').textContent = hex2(e.io_wy());
-        $('r-bgp').textContent = hex2(e.io_bgp());
-        $('r-obp0').textContent = hex2(e.io_obp0());
-        $('r-obp1').textContent = hex2(e.io_obp1());
+
+        // Mode badge + conditional rows
+        $('cgb-badge').style.display = cgb ? '' : 'none';
+        $('row-dmg-pal').style.display = cgb ? 'none' : '';
+        $('row-cgb-regs').style.display = cgb ? '' : 'none';
+        $('cgb-palettes').style.display = cgb ? '' : 'none';
+
+        if (cgb) {
+            $('r-vbk').textContent  = String(e.io_vbk());
+            $('r-svbk').textContent = String(e.io_svbk());
+            $('r-key1').textContent = hex2(e.io_key1());
+            drawPaletteCanvas('cgb-bg-pal',  (p, c) => e.get_bg_palette_color(p, c));
+            drawPaletteCanvas('cgb-obj-pal', (p, c) => e.get_obj_palette_color(p, c));
+        } else {
+            $('r-bgp').textContent  = hex2(e.io_bgp());
+            $('r-obp0').textContent = hex2(e.io_obp0());
+            $('r-obp1').textContent = hex2(e.io_obp1());
+        }
     }
 
     function updateDisassembly() {

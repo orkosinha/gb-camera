@@ -410,6 +410,53 @@ impl GameBoy {
     pub fn io_joypad(&self) -> u8 {
         self.core.memory.read_io_direct(io::JOYP)
     }
+
+    // ── GBC registers ────────────────────────────────────────────────────────
+
+    pub fn is_cgb_mode(&self) -> bool {
+        self.core.memory.is_cgb_mode()
+    }
+
+    /// KEY1: speed-switch register (bit 7 = current speed, bit 0 = armed).
+    pub fn io_key1(&self) -> u8 {
+        self.core.memory.read(0xFF4D)
+    }
+
+    /// VBK: current VRAM bank (0 or 1).
+    pub fn io_vbk(&self) -> u8 {
+        self.core.memory.read(0xFF4F) & 0x01
+    }
+
+    /// SVBK: current WRAM bank (1–7; bank 0 maps to 1).
+    pub fn io_svbk(&self) -> u8 {
+        let v = self.core.memory.read(0xFF70) & 0x07;
+        if v == 0 { 1 } else { v }
+    }
+
+    /// Colour of `color` (0–3) in BG `palette` (0–7) as 0xRRGGBB.
+    pub fn get_bg_palette_color(&self, palette: u8, color: u8) -> u32 {
+        let (lo, hi) = self.core.memory.read_bg_palette(palette as usize, color as usize);
+        rgb555_to_rgb888(lo, hi)
+    }
+
+    /// Colour of `color` (0–3) in OBJ `palette` (0–7) as 0xRRGGBB.
+    pub fn get_obj_palette_color(&self, palette: u8, color: u8) -> u32 {
+        let (lo, hi) = self.core.memory.read_obj_palette(palette as usize, color as usize);
+        rgb555_to_rgb888(lo, hi)
+    }
+}
+
+/// Convert RGB555 (lo byte, hi byte) to 0xRRGGBB.
+fn rgb555_to_rgb888(lo: u8, hi: u8) -> u32 {
+    let raw = (lo as u16) | ((hi as u16) << 8);
+    let r5 = (raw & 0x1F) as u32;
+    let g5 = ((raw >> 5) & 0x1F) as u32;
+    let b5 = ((raw >> 10) & 0x1F) as u32;
+    // Expand 5→8 bits: multiply by 255/31 ≈ 8.226; shifting left 3 is a fast approximation.
+    let r8 = (r5 << 3) | (r5 >> 2);
+    let g8 = (g5 << 3) | (g5 >> 2);
+    let b8 = (b5 << 3) | (b5 >> 2);
+    (r8 << 16) | (g8 << 8) | b8
 }
 
 impl Default for GameBoy {

@@ -549,7 +549,7 @@
                         class="panel-head"
                         onclick="this.parentElement.classList.toggle('shut')"
                     >
-                        PPU
+                        PPU <span id="cgb-badge" style="display:none;margin-left:6px;opacity:0.5">[GBC]</span>
                     </div>
                     <div class="panel-body">
                         <div class="reg-tbl">
@@ -573,7 +573,8 @@
                                 <span class="lbl">WY</span
                                 ><span class="val" id="r-wy">00</span>
                             </div>
-                            <div class="row">
+                            <!-- DMG palette registers (hidden in GBC mode) -->
+                            <div class="row" id="row-dmg-pal">
                                 <span class="lbl">BGP</span
                                 ><span class="val" id="r-bgp">00</span>
                                 <span class="lbl">OBP0</span
@@ -583,6 +584,26 @@
                                 <span class="lbl"></span
                                 ><span class="val"></span>
                             </div>
+                            <!-- GBC banking/speed registers (shown in GBC mode) -->
+                            <div class="row" id="row-cgb-regs" style="display:none">
+                                <span class="lbl">VBK</span
+                                ><span class="val" id="r-vbk">0</span>
+                                <span class="lbl">SVBK</span
+                                ><span class="val" id="r-svbk">1</span>
+                                <span class="lbl">KEY1</span
+                                ><span class="val" id="r-key1">00</span>
+                                <span class="lbl"></span
+                                ><span class="val"></span>
+                            </div>
+                        </div>
+                        <!-- GBC colour palettes (shown in GBC mode) -->
+                        <div id="cgb-palettes" style="display:none;margin-top:6px">
+                            <div class="sub" style="margin-top:0">BG Palettes</div>
+                            <canvas id="cgb-bg-pal" width="32" height="1"
+                                style="width:256px;height:12px;image-rendering:pixelated;border:1px solid var(--border)"></canvas>
+                            <div class="sub">OBJ Palettes</div>
+                            <canvas id="cgb-obj-pal" width="32" height="1"
+                                style="width:256px;height:12px;image-rendering:pixelated;border:1px solid var(--border)"></canvas>
                         </div>
                     </div>
                 </div>
