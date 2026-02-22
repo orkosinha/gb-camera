@@ -362,12 +362,11 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
     //   FF80: exposure low byte
     //   FF81: exposure high byte
     //   FF82: contrast level (0-15)
+    //   FF89: previous d-pad state (contrast debounce)
     //
-    // D-PAD controls (read each frame):
-    //   Up:    increase brightness (exposure += 0x0400)
-    //   Down:  decrease brightness (exposure -= 0x0400)
-    //   Right: increase contrast (+1, max 15)
-    //   Left:  decrease contrast (-1, min 0)
+    // D-PAD controls:
+    //   Up/Down:    change brightness each frame (level-triggered, fast)
+    //   Right/Left: change contrast once per press (edge-triggered, debounced)
     let mut code: Vec<u8> = Vec::new();
 
     // === INIT (0x0150) ===
@@ -406,6 +405,9 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         // FF86 = 1 (next save slot)
         0x3E, 0x01, // ld a, 1
         0xE0, 0x86, // ldh [$FF86], a
+        // FF89 = 0 (previous d-pad state for contrast debounce)
+        0xAF,       // xor a
+        0xE0, 0x89, // ldh [$FF89], a
     ]);
 
     // === Select SRAM bank 0 and init state vector ===
@@ -562,6 +564,14 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0xE6,
         0x0F, // and $0F (mask d-pad bits)
         0x47, // ld b, a
+        // Compute edge mask for contrast buttons (D = current & ~prev)
+        0x4F,       // ld c, a         (C = current d-pad)
+        0xF0, 0x89, // ldh a, [$FF89]  (prev d-pad)
+        0x2F,       // cpl             (~prev)
+        0xA1,       // and c           (newly pressed = current & ~prev)
+        0x57,       // ld d, a         (D = edge mask for contrast)
+        0x79,       // ld a, c
+        0xE0, 0x89, // ldh [$FF89], a  (update prev = current)
         // --- Check Up (bit 2): increase exposure high byte by 4 ---
         0xCB,
         0x50, // bit 2, b
@@ -592,9 +602,9 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x04, // sub $04
         0xE0,
         0x81, // ldh [$FF81], a
-        // --- Check Right (bit 0): increase contrast ---
+        // --- Check Right (bit 0): increase contrast (edge-triggered via D) ---
         0xCB,
-        0x40, // bit 0, b
+        0x42, // bit 0, d
         0x28,
         0x09, // jr z, +9 (skip to no_right)
         0xF0,
@@ -606,9 +616,9 @@ fn build_rom(config: &CameraConfig) -> Vec<u8> {
         0x3C, // inc a
         0xE0,
         0x82, // ldh [$FF82], a
-        // --- Check Left (bit 1): decrease contrast ---
+        // --- Check Left (bit 1): decrease contrast (edge-triggered via D) ---
         0xCB,
-        0x48, // bit 1, b
+        0x4A, // bit 1, d
         0x28,
         0x08, // jr z, +8 (skip to no_left)
         0xF0,
